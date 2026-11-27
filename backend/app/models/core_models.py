@@ -42,6 +42,7 @@ class User(Base):
     display_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
     preferred_currency: Mapped[str] = mapped_column(String(3), default="INR", nullable=False)
     account_status: Mapped[str] = mapped_column(String(32), default="ACTIVE", nullable=False)
+    last_login_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow, nullable=False)
 
@@ -64,6 +65,22 @@ class UserRoleAssignment(Base):
     platform_role_id: Mapped[str] = mapped_column(UUIDChar(), ForeignKey("platform_roles.id"), nullable=False)
     assignment_status: Mapped[str] = mapped_column(String(32), default="ACTIVE", nullable=False)
     granted_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, nullable=False)
+
+
+class UserLoginLog(Base):
+    """Per-role registration & sign-in audit trail (`REGISTER` vs `LOGIN`)."""
+
+    __tablename__ = "user_login_logs"
+
+    id: Mapped[str] = mapped_column(UUIDChar(), primary_key=True, default=new_uuid)
+    user_id: Mapped[str] = mapped_column(UUIDChar(), ForeignKey("users.id"), nullable=False)
+    role_code: Mapped[str] = mapped_column(String(50), nullable=False)
+    auth_event_type: Mapped[str] = mapped_column(String(24), nullable=False)  # REGISTER | LOGIN
+    auth_method: Mapped[str] = mapped_column(String(32), nullable=False)  # clerk_signup | clerk_signin | clerk_sync | admin_password
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, nullable=False)
 
 

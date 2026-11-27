@@ -135,7 +135,7 @@ def test_04_artisan_sync_and_verification_persists_seller_profile_without_self_a
     assert sync_resp.status_code == 200
     synced = sync_resp.json()
     assert synced["is_new_user"] is True
-    assert set(synced["roles"]) == {"CUSTOMER", "DIRECT_SELLER"}
+    assert set(synced["roles"]) == {"DIRECT_SELLER"}
 
     # Now load principal cleanly via DB lookup and submit Artisan GI verification
     from app.core.auth import load_principal_by_clerk_id
@@ -730,3 +730,234 @@ def test_09_unregistered_oauth_user_or_artisan_blocked_on_signin_with_404(app_an
     assert r_login.json()["artisan_verified"] is False
 
     _set_clerk_claims(app, None)
+
+
+def test_10_strict_role_isolation_blocks_cross_role_login_and_tracks_logs(
+    app_and_client, db_session
+):
+    from app.core.auth import load_principal_by_clerk_id
+    from app.models.core_models import UserLoginLog
+
+    app, client = app_and_client
+    app.dependency_overrides.pop(get_current_principal, None)
+
+    # 1. Register a pure Buyer (CUSTOMER) — granted ONLY CUSTOMER, event=REGISTER, last_login_at=None
+    _set_clerk_claims(app, {"sub": "user_iso_buyer_01", "email": "iso.buyer@example.com"})
+    reg_b = client.post(
+        "/api/v1/auth/sync",
+        json={
+            "email": "iso.buyer@example.com",
+            "email_verified": True,
+            "first_name": "Meera",
+            "requested_role": "buyer",
+            "auth_mode": "signup",
+        },
+    )
+    assert reg_b.status_code == 200
+    assert reg_b.json()["roles"] == ["CUSTOMER"]
+    assert reg_b.json()["last_login_at"] is None
+
+    # 2. Register a pure Artisan (DIRECT_SELLER) — granted ONLY DIRECT_SELLER (not CUSTOMER)
+    _set_clerk_claims(app, {"sub": "user_iso_artisan_01", "email": "iso.artisan@example.com"})
+    reg_a = client.post(
+        "/api/v1/auth/sync",
+        json={
+            "email": "iso.artisan@example.com",
+            "email_verified": True,
+            "first_name": "Tariq",
+            "requested_role": "artisan",
+            "auth_mode": "signup",
+        },
+    )
+    assert reg_a.status_code == 200
+    assert reg_a.json()["roles"] == ["DIRECT_SELLER"]
+    assert reg_a.json()["last_login_at"] is None
+
+    # 3. check-account reports role_conflict=True on mismatched roles
+    chk_b_as_art = client.post(
+        "/api/v1/auth/check-account",
+        json={"email": "iso.buyer@example.com", "requested_role": "artisan"},
+    )
+    assert chk_b_as_art.status_code == 200
+    assert chk_b_as_art.json()["role_conflict"] is True
+    assert chk_b_as_art.json()["has_requested_role"] is False
+    assert "buyer" in chk_b_as_art.json()["conflict_message"].lower()
+
+    chk_a_as_buy = client.post(
+        "/api/v1/auth/check-account",
+        json={"email": "iso.artisan@example.com", "requested_role": "buyer"},
+    )
+    assert chk_a_as_buy.status_code == 200
+    assert chk_a_as_buy.json()["role_conflict"] is True
+    assert "artisan" in chk_a_as_buy.json()["conflict_message"].lower()
+
+    # 4. Cross-role /auth/sync sign-in is blocked with 403 Forbidden
+    _set_clerk_claims(app, {"sub": "user_iso_buyer_01", "email": "iso.buyer@example.com"})
+    cross_1 = client.post(
+        "/api/v1/auth/sync",
+        json={
+            "email": "iso.buyer@example.com",
+            "email_verified": True,
+            "first_name": "Meera",
+            "requested_role": "artisan",
+            "auth_mode": "signin",
+        },
+    )
+    assert cross_1.status_code == 403
+
+    # Buyer cannot submit /auth/artisan-verification
+    buyer_principal = load_principal_by_clerk_id(db_session, "user_iso_buyer_01")
+    set_authenticated_principal(app, buyer_principal)
+    forbid_ver = client.post(
+        "/api/v1/auth/artisan-verification",
+        json={
+            "store_name": "Fake Studio",
+            "craft_specialty": "Pashmina",
+            "workshop_district": "Srinagar",
+            "verification_path": "GI",
+            "claimed_gi_code": "GI-JK-PASH-1111",
+        },
+    )
+    assert forbid_ver.status_code == 403
+    app.dependency_overrides.pop(get_current_principal, None)
+
+    _set_clerk_claims(app, {"sub": "user_iso_artisan_01", "email": "iso.artisan@example.com"})
+    cross_2 = client.post(
+        "/api/v1/auth/sync",
+        json={
+            "email": "iso.artisan@example.com",
+            "email_verified": True,
+            "first_name": "Tariq",
+            "requested_role": "buyer",
+            "auth_mode": "signin",
+        },
+    )
+    assert cross_2.status_code == 403
+
+    # 5. Same-role sign-in succeeds, updates last_login_at, and logs LOGIN event
+    _set_clerk_claims(app, {"sub": "user_iso_buyer_01", "email": "iso.buyer@example.com"})
+    login_b = client.post(
+        "/api/v1/auth/sync",
+        json={
+            "email": "iso.buyer@example.com",
+            "email_verified": True,
+            "first_name": "Meera",
+            "requested_role": "buyer",
+            "auth_mode": "signin",
+        },
+    )
+    assert login_b.status_code == 200
+    assert login_b.json()["last_login_at"] is not None
+
+    logs = list(
+        db_session.scalars(
+            select(UserLoginLog).order_by(UserLoginLog.created_at.asc())
+        ).all()
+    )
+    buyer_events = [l.auth_event_type for l in logs if l.email == "iso.buyer@example.com"]
+    artisan_events = [l.auth_event_type for l in logs if l.email == "iso.artisan@example.com"]
+    assert buyer_events == ["REGISTER", "LOGIN"]
+    assert artisan_events == ["REGISTER"]
+    _set_clerk_claims(app, None)
+
+
+def test_11_admin_overview_and_users_by_role_separate_registered_vs_logged_in(
+    app_and_client, db_session
+):
+    from tests.conftest import seed_marketplace_entities
+
+    app, client = app_and_client
+    entities = seed_marketplace_entities(db_session)
+
+    # Register Buyer A (logs in) and Buyer B (registers only, never logs in)
+    _set_clerk_claims(app, {"sub": "user_sep_b1", "email": "buyer.active@example.com"})
+    assert (
+        client.post(
+            "/api/v1/auth/sync",
+            json={
+                "email": "buyer.active@example.com",
+                "first_name": "ActiveBuyer",
+                "requested_role": "buyer",
+                "auth_mode": "signup",
+            },
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            "/api/v1/auth/sync",
+            json={
+                "email": "buyer.active@example.com",
+                "first_name": "ActiveBuyer",
+                "requested_role": "buyer",
+                "auth_mode": "signin",
+            },
+        ).status_code
+        == 200
+    )
+
+    _set_clerk_claims(app, {"sub": "user_sep_b2", "email": "buyer.regonly@example.com"})
+    assert (
+        client.post(
+            "/api/v1/auth/sync",
+            json={
+                "email": "buyer.regonly@example.com",
+                "first_name": "RegOnlyBuyer",
+                "requested_role": "buyer",
+                "auth_mode": "signup",
+            },
+        ).status_code
+        == 200
+    )
+
+    # Register Artisan A (registers only, never logs in)
+    _set_clerk_claims(app, {"sub": "user_sep_a1", "email": "artisan.regonly@example.com"})
+    assert (
+        client.post(
+            "/api/v1/auth/sync",
+            json={
+                "email": "artisan.regonly@example.com",
+                "first_name": "RegOnlyArtisan",
+                "requested_role": "artisan",
+                "auth_mode": "signup",
+            },
+        ).status_code
+        == 200
+    )
+    _set_clerk_claims(app, None)
+
+    set_authenticated_principal(app, entities["admin_principal"])
+    ov = client.get("/api/v1/admin/overview")
+    assert ov.status_code == 200
+    data = ov.json()
+    rd = data["role_directory"]
+
+    buyer_logged_emails = {u["email"] for u in rd["buyers"]["logged_in"]}
+    buyer_never_emails = {u["email"] for u in rd["buyers"]["never_logged_in"]}
+    assert "buyer.active@example.com" in buyer_logged_emails
+    assert "buyer.regonly@example.com" in buyer_never_emails
+    assert "artisan.regonly@example.com" not in {
+        u["email"] for u in rd["buyers"]["registered"]
+    }
+
+    artisan_never_emails = {u["email"] for u in rd["artisans"]["never_logged_in"]}
+    assert "artisan.regonly@example.com" in artisan_never_emails
+
+    # Dedicated endpoint filter test
+    res_logged_buyers = client.get(
+        "/api/v1/admin/users-by-role?role_code=CUSTOMER&activity=logged_in"
+    )
+    assert res_logged_buyers.status_code == 200
+    logged_emails = {u["email"] for u in res_logged_buyers.json()["groups"]["buyers"]["users"]}
+    assert "buyer.active@example.com" in logged_emails
+    assert "buyer.regonly@example.com" not in logged_emails
+
+    res_regonly_buyers = client.get(
+        "/api/v1/admin/users-by-role?role_code=CUSTOMER&activity=never_logged_in"
+    )
+    assert res_regonly_buyers.status_code == 200
+    regonly_emails = {u["email"] for u in res_regonly_buyers.json()["groups"]["buyers"]["users"]}
+    assert "buyer.regonly@example.com" in regonly_emails
+    assert "buyer.active@example.com" not in regonly_emails
+
+    app.dependency_overrides.pop(get_current_principal, None)

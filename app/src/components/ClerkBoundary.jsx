@@ -419,6 +419,34 @@ function ClerkBridgeInner({ children }) {
         await hydrateFromBackend(token);
         return res;
       } catch (err) {
+        if (err?.status === 403) {
+          conflictSigningOutRef.current = true;
+          clearPendingClerkRole();
+          clearPendingClerkAuthMode();
+          lastDbSyncKeyRef.current = '';
+          syncedAccountIdsRef.current.clear();
+          clearSessionState();
+          setUser(null, { silent: true });
+          try {
+            if (clerk?.signOut) {
+              await clerk.signOut(() => {});
+            }
+          } catch {
+            /* ignore */
+          }
+          conflictSigningOutRef.current = false;
+          const msg = encodeURIComponent(
+            err?.message || 'Role mismatch: this account belongs to a different HunarLink role.'
+          );
+          const roleQuery = requestedRole === 'artisan' ? '&role=artisan' : '';
+          navigate(
+            requestedRole === 'artisan'
+              ? `/auth?mode=signin&role_conflict=1&conflict_msg=${msg}`
+              : `/login?mode=signin&role_conflict=1${roleQuery}&conflict_msg=${msg}`,
+            { replace: true }
+          );
+          return null;
+        }
         if (err?.status === 404) {
           // Strict DB login check: email/user does NOT exist in HunarLink DB ->
           // sign out Clerk immediately and redirect to Register page for the respective role!
@@ -562,13 +590,18 @@ function ClerkBridgeInner({ children }) {
       const normalizedRole = role === 'artisan' ? 'artisan' : 'buyer';
       const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
 
-      /* If already signed in via Clerk, switch HunarLink workspace directly
-         rather than letting Clerk throw "You're already signed in". */
+      /* If already signed in via Clerk, verify role against DB before switching workspace */
       if (isSignedIn && clerkUser) {
-        saveUserRole(clerkUser.id, normalizedRole);
         const synced = buildSyncedUser(clerkUser, normalizedRole);
-        setUser(synced.payload, { silent: true });
-        syncUserToBackend(clerkUser, synced, normalizedRole);
+        if (canAttemptBackend()) {
+          const res = await syncUserToBackend(clerkUser, synced, normalizedRole, 'signin');
+          if (!res) {
+            return { alreadySignedIn: false };
+          }
+        } else {
+          saveUserRole(clerkUser.id, normalizedRole);
+          setUser(synced.payload, { silent: true });
+        }
 
         if (normalizedRole === 'buyer') {
           setBuyerProfile({
@@ -690,9 +723,18 @@ function ClerkBridgeInner({ children }) {
       // 1. Live HunarLink DB check BEFORE calling Clerk:
       //    - Existing DB user/artisan CANNOT register (must log in).
       //    - Non-existent user on Sign In is directed cleanly to Register.
+      //    - Strict role isolation blocks cross-role sign-in/signup (Buyer vs Artisan vs Admin).
       if (canAttemptBackend()) {
         try {
-          const acct = await checkAuthAccount(cleaned);
+          const acct = await checkAuthAccount(cleaned, normalizedRole);
+          if (acct?.role_conflict) {
+            const roleErr = new Error(
+              acct.conflict_message ||
+                'This email is registered under a different role in HunarLink.'
+            );
+            roleErr.code = 'ROLE_CONFLICT';
+            throw roleErr;
+          }
           if (normalizedMode === 'signup' && acct?.exists) {
             const dupErr = new Error(
               'This email already exists in HunarLink. You cannot register again — please Sign In instead.'
@@ -708,7 +750,11 @@ function ClerkBridgeInner({ children }) {
             throw missErr;
           }
         } catch (checkErr) {
-          if (checkErr?.code === 'ALREADY_REGISTERED' || checkErr?.code === 'NOT_REGISTERED') {
+          if (
+            checkErr?.code === 'ALREADY_REGISTERED' ||
+            checkErr?.code === 'NOT_REGISTERED' ||
+            checkErr?.code === 'ROLE_CONFLICT'
+          ) {
             clearPendingClerkRole();
             clearPendingClerkAuthMode();
             throw checkErr;
@@ -896,7 +942,15 @@ function ClerkBridgeInner({ children }) {
 
       if (canAttemptBackend()) {
         try {
-          const acct = await checkAuthAccount(cleaned);
+          const acct = await checkAuthAccount(cleaned, normalizedRole);
+          if (acct?.role_conflict) {
+            const roleErr = new Error(
+              acct.conflict_message ||
+                'This email is registered under a different role in HunarLink.'
+            );
+            roleErr.code = 'ROLE_CONFLICT';
+            throw roleErr;
+          }
           if (acct && acct.exists === false) {
             const missErr = new Error(
               'No HunarLink account exists for this email yet. Please switch to Register to create one.'
@@ -905,7 +959,7 @@ function ClerkBridgeInner({ children }) {
             throw missErr;
           }
         } catch (checkErr) {
-          if (checkErr?.code === 'NOT_REGISTERED') {
+          if (checkErr?.code === 'NOT_REGISTERED' || checkErr?.code === 'ROLE_CONFLICT') {
             clearPendingClerkRole();
             clearPendingClerkAuthMode();
             throw checkErr;

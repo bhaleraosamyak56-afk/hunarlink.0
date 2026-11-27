@@ -42,6 +42,7 @@ from app.models.core_models import (
     SellerProfile,
     SellerVerificationApplication,
     User,
+    UserLoginLog,
     UserRoleAssignment,
 )
 from app.models.guardrail_models import FileSecurityScan
@@ -846,6 +847,100 @@ def admin_live_overview(
         if "DIRECT_SELLER" in roles_by_user_id.get(u.id, []) and u.id not in seller_by_user_id
     ]
 
+    UserLoginLog.__table__.create(bind=db.get_bind(), checkfirst=True)
+    login_logs = list(
+        db.scalars(
+            select(UserLoginLog).order_by(UserLoginLog.created_at.desc()).limit(500)
+        ).all()
+    )
+
+    login_stats: dict[tuple[str, str], dict] = {}
+    any_login_by_user: set[str] = set()
+    for log_row in login_logs:
+        if log_row.auth_event_type == "LOGIN":
+            any_login_by_user.add(log_row.user_id)
+            key = (log_row.user_id, log_row.role_code)
+            entry = login_stats.get(key)
+            if entry is None:
+                login_stats[key] = {"count": 1, "latest": log_row.created_at}
+            else:
+                entry["count"] += 1
+                if log_row.created_at > entry["latest"]:
+                    entry["latest"] = log_row.created_at
+
+    admin_cred_by_user_id = {ac.user_id: ac for ac in admin_creds}
+
+    def _build_role_entry(u: User, role_code: str) -> dict:
+        stat = login_stats.get((u.id, role_code))
+        ac = admin_cred_by_user_id.get(u.id) if role_code == "ADMIN" else None
+        sp = seller_by_user_id.get(u.id) if role_code == "DIRECT_SELLER" else None
+        legacy_login = None
+        if stat is None and u.id not in any_login_by_user:
+            legacy_login = (ac.last_login_at if ac else None) or u.last_login_at
+        elif role_code == "ADMIN" and ac and ac.last_login_at and (stat is None or ac.last_login_at > stat["latest"]):
+            legacy_login = ac.last_login_at
+        effective_last_login = (stat["latest"] if stat else None) or legacy_login
+        login_count = stat["count"] if stat else (1 if effective_last_login is not None else 0)
+        return {
+            "user_id": u.id,
+            "clerk_user_id": u.clerk_user_id,
+            "name": u.display_name or f"{u.first_name} {u.last_name or ''}".strip(),
+            "email": u.email,
+            "phone": u.phone,
+            "role_code": role_code,
+            "account_status": u.account_status,
+            "registered_at": u.created_at.isoformat(),
+            "last_login_at": effective_last_login.isoformat() if effective_last_login else None,
+            "login_count": login_count,
+            "has_logged_in": effective_last_login is not None,
+            "store_name": sp.store_name if sp else None,
+            "seller_profile_id": sp.id if sp else None,
+            "verification_status": sp.verification_status if sp else None,
+            "profile_status": sp.profile_status if sp else None,
+            "admin_active": ac.is_active if ac else None,
+        }
+
+    role_groups_spec = [
+        ("buyers", "Buyers (CUSTOMER)", {"CUSTOMER"}),
+        ("artisans", "Artisans (DIRECT_SELLER)", {"DIRECT_SELLER"}),
+        ("wholesale", "Wholesale / Dealers / Suppliers", {"WHOLESALE_BUYER", "DEALER", "SUPPLIER"}),
+        ("admins", "Administrators (ADMIN)", {"ADMIN"}),
+    ]
+    role_directory: dict[str, dict] = {}
+    for group_key, group_label, target_codes in role_groups_spec:
+        registered_items: list[dict] = []
+        seen_uids: set[str] = set()
+        for u in users:
+            u_roles = set(roles_by_user_id.get(u.id, []))
+            if group_key == "admins" and u.id in admin_cred_by_user_id:
+                u_roles.add("ADMIN")
+            matched = sorted(u_roles & target_codes)
+            if not matched:
+                continue
+            if u.id in seen_uids:
+                continue
+            seen_uids.add(u.id)
+            registered_items.append(_build_role_entry(u, matched[0]))
+
+        logged_in_items = sorted(
+            [item for item in registered_items if item["has_logged_in"]],
+            key=lambda x: x["last_login_at"] or "",
+            reverse=True,
+        )
+        never_logged_in_items = [item for item in registered_items if not item["has_logged_in"]]
+        role_directory[group_key] = {
+            "label": group_label,
+            "counts": {
+                "registered": len(registered_items),
+                "logged_in": len(logged_in_items),
+                "never_logged_in": len(never_logged_in_items),
+                "total_login_events": sum(item["login_count"] for item in registered_items),
+            },
+            "registered": registered_items,
+            "logged_in": logged_in_items,
+            "never_logged_in": never_logged_in_items,
+        }
+
     return {
         "admin_user_id": admin.user_id,
         "admin_permissions": sorted(admin.admin_permissions),
@@ -857,7 +952,42 @@ def admin_live_overview(
             "listings": len(listings),
             "orders": len(orders),
             "admins": len(admin_creds),
+            "logged_in_users": sum(
+                1
+                for u in users
+                if u.last_login_at is not None
+                or u.id in any_login_by_user
+                or (u.id in admin_cred_by_user_id and admin_cred_by_user_id[u.id].last_login_at is not None)
+            ),
+            "registered_buyers": role_directory["buyers"]["counts"]["registered"],
+            "logged_in_buyers": role_directory["buyers"]["counts"]["logged_in"],
+            "registered_artisans": role_directory["artisans"]["counts"]["registered"],
+            "logged_in_artisans": role_directory["artisans"]["counts"]["logged_in"],
+            "registered_wholesale": role_directory["wholesale"]["counts"]["registered"],
+            "logged_in_wholesale": role_directory["wholesale"]["counts"]["logged_in"],
+            "registered_admins": role_directory["admins"]["counts"]["registered"],
+            "logged_in_admins": role_directory["admins"]["counts"]["logged_in"],
         },
+        "role_directory": role_directory,
+        "recent_auth_events": [
+            {
+                "id": ev.id,
+                "user_id": ev.user_id,
+                "name": (
+                    users_by_id[ev.user_id].display_name
+                    or f"{users_by_id[ev.user_id].first_name} {users_by_id[ev.user_id].last_name or ''}".strip()
+                )
+                if ev.user_id in users_by_id
+                else ev.email,
+                "email": ev.email,
+                "role_code": ev.role_code,
+                "auth_event_type": ev.auth_event_type,
+                "auth_method": ev.auth_method,
+                "ip_address": ev.ip_address,
+                "created_at": ev.created_at.isoformat(),
+            }
+            for ev in login_logs[:100]
+        ],
         "incomplete_artisan_signups": [
             {
                 "user_id": u.id,
@@ -989,6 +1119,23 @@ def admin_live_overview(
                     )
                 ),
                 "account_status": u.account_status,
+                "last_login_at": (
+                    u.last_login_at.isoformat()
+                    if u.last_login_at
+                    else (
+                        admin_cred_by_user_id[u.id].last_login_at.isoformat()
+                        if u.id in admin_cred_by_user_id and admin_cred_by_user_id[u.id].last_login_at
+                        else None
+                    )
+                ),
+                "has_logged_in": bool(
+                    u.last_login_at is not None
+                    or u.id in any_login_by_user
+                    or (u.id in admin_cred_by_user_id and admin_cred_by_user_id[u.id].last_login_at is not None)
+                ),
+                "login_count": sum(
+                    st["count"] for (uid, _rc), st in login_stats.items() if uid == u.id
+                ),
                 "created_at": u.created_at.isoformat(),
             }
             for u in users
@@ -1030,6 +1177,76 @@ def admin_live_overview(
             }
             for o in orders
         ],
+    }
+
+
+@router.get("/admin/users-by-role")
+def admin_users_by_role(
+    role_code: str | None = None,
+    activity: str = "all",
+    admin: AuthenticatedPrincipal = Depends(require_admin_permission("payments.read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Dedicated admin endpoint separating Registered vs Logged-In users per role."""
+    snapshot = admin_live_overview(admin=admin, db=db)
+    role_dir = snapshot["role_directory"]
+    recent_events = snapshot["recent_auth_events"]
+
+    code_map = {
+        "CUSTOMER": "buyers",
+        "BUYER": "buyers",
+        "DIRECT_SELLER": "artisans",
+        "ARTISAN": "artisans",
+        "WHOLESALE": "wholesale",
+        "WHOLESALE_BUYER": "wholesale",
+        "DEALER": "wholesale",
+        "SUPPLIER": "wholesale",
+        "ADMIN": "admins",
+    }
+    selected_key = code_map.get((role_code or "").strip().upper()) if role_code else None
+    if role_code and selected_key is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Unsupported role_code filter. Use CUSTOMER, DIRECT_SELLER, WHOLESALE, or ADMIN.",
+        )
+
+    norm_activity = (activity or "all").strip().lower()
+    if norm_activity not in {"all", "registered", "logged_in", "never_logged_in"}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="activity must be one of: all, registered, logged_in, never_logged_in.",
+        )
+
+    result_groups: dict[str, dict] = {}
+    for key, group in role_dir.items():
+        if selected_key and key != selected_key:
+            continue
+        if norm_activity == "logged_in":
+            rows = group["logged_in"]
+        elif norm_activity == "never_logged_in":
+            rows = group["never_logged_in"]
+        else:
+            rows = group["registered"]
+        result_groups[key] = {
+            "label": group["label"],
+            "counts": group["counts"],
+            "users": rows,
+        }
+
+    filtered_events = (
+        [
+            ev
+            for ev in recent_events
+            if code_map.get(ev["role_code"]) == selected_key
+        ]
+        if selected_key
+        else recent_events
+    )
+    return {
+        "role_filter": selected_key or "all",
+        "activity_filter": norm_activity,
+        "groups": result_groups,
+        "recent_auth_events": filtered_events,
     }
 
 

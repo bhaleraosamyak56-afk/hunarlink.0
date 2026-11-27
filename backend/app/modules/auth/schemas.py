@@ -33,14 +33,21 @@ class AccountCheckRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     email: str = Field(..., min_length=3, max_length=255)
+    requested_role: Literal["buyer", "artisan"] | None = None
 
 
 class AccountCheckResponse(BaseModel):
     exists: bool
     roles: list[str] = Field(default_factory=list)
+    is_buyer: bool = False
     is_artisan: bool = False
+    is_admin: bool = False
     artisan_verified: bool = False
     artisan_verification_status: str | None = None
+    has_requested_role: bool | None = None
+    role_conflict: bool = False
+    conflict_message: str | None = None
+    last_login_at: datetime | None = None
 
 
 class SellerProfileBrief(BaseModel):
@@ -78,6 +85,7 @@ class AuthUserProfileResponse(BaseModel):
     is_admin: bool = False
     admin_permissions: list[str] = Field(default_factory=list)
     seller_profile: SellerProfileBrief | None = None
+    last_login_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 

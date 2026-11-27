@@ -51,16 +51,20 @@ export default function LoginPage() {
       : 'signin';
   const alreadyRegisteredNotice = params.get('already_registered') === '1';
   const notRegisteredNotice = params.get('not_registered') === '1';
+  const roleConflictNotice = params.get('role_conflict') === '1';
+  const conflictMsg = params.get('conflict_msg') || '';
   const nextUrl = params.get('next') || '/';
 
   const [authMode, setAuthMode] = useState(notRegisteredNotice ? 'register' : initialMode); // 'signin' | 'register'
   const [role, setRole] = useState(initialRole);
   const [errMsg, setErrMsg] = useState(
-    alreadyRegisteredNotice
-      ? 'This account already exists in HunarLink. You cannot register again — please Sign In below.'
-      : notRegisteredNotice
-        ? 'No registered HunarLink account was found for that email. Please register first below.'
-        : ''
+    roleConflictNotice
+      ? conflictMsg || 'This account is registered under a different role in HunarLink.'
+      : alreadyRegisteredNotice
+        ? 'This account already exists in HunarLink. You cannot register again — please Sign In below.'
+        : notRegisteredNotice
+          ? 'No registered HunarLink account was found for that email. Please register first below.'
+          : ''
   );
   const [busyProvider, setBusyProvider] = useState(null);
 
@@ -81,7 +85,16 @@ export default function LoginPage() {
   const isVerifiedArtisan = Boolean(isArtisanSession && user?.artisanVerified);
 
   useEffect(() => {
-    if (params.get('already_registered') === '1') {
+    if (params.get('role_conflict') === '1') {
+      setAuthMode('signin');
+      setPendingFlow('signIn');
+      setEmailStep('input');
+      setCode('');
+      setErrMsg(
+        params.get('conflict_msg') ||
+          'Role mismatch: this email is registered under a different HunarLink role.'
+      );
+    } else if (params.get('already_registered') === '1') {
       setAuthMode('signin');
       setPendingFlow('signIn');
       setEmailStep('input');

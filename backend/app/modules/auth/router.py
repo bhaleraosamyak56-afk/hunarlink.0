@@ -44,6 +44,7 @@ from app.models.core_models import (
     SellerVerificationApplication,
     User,
     UserAddress,
+    UserLoginLog,
     UserRoleAssignment,
 )
 from app.models.guardrail_models import FileSecurityScan
@@ -218,8 +219,84 @@ def _build_user_response(
         is_admin=is_admin,
         admin_permissions=admin_permissions,
         seller_profile=seller_brief,
+        last_login_at=user.last_login_at,
         created_at=user.created_at,
         updated_at=user.updated_at,
+    )
+
+
+def _get_user_active_roles(db: Session, user_id: str) -> list[str]:
+    return sorted(
+        set(
+            db.scalars(
+                select(PlatformRole.code)
+                .join(
+                    UserRoleAssignment,
+                    UserRoleAssignment.platform_role_id == PlatformRole.id,
+                )
+                .where(
+                    UserRoleAssignment.user_id == user_id,
+                    UserRoleAssignment.assignment_status == "ACTIVE",
+                    PlatformRole.is_active == True,  # noqa: E712
+                )
+            ).all()
+        )
+    )
+
+
+def _is_admin_account(db: Session, user_id: str, role_codes: list[str]) -> bool:
+    if "ADMIN" in role_codes:
+        return True
+    if (
+        db.scalar(
+            select(AdminProfile.id).where(
+                AdminProfile.user_id == user_id,
+                AdminProfile.admin_status == "ACTIVE",
+            )
+        )
+        is not None
+    ):
+        return True
+    try:
+        AdminCredential.__table__.create(bind=db.get_bind(), checkfirst=True)
+        if (
+            db.scalar(
+                select(AdminCredential.id).where(
+                    AdminCredential.user_id == user_id,
+                    AdminCredential.is_active == True,  # noqa: E712
+                )
+            )
+            is not None
+        ):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _record_auth_event(
+    db: Session,
+    *,
+    user: User,
+    role_code: str,
+    event_type: str,
+    auth_method: str,
+    request: Request,
+) -> None:
+    UserLoginLog.__table__.create(bind=db.get_bind(), checkfirst=True)
+    ip_addr = request.client.host if request.client else None
+    ua = request.headers.get("user-agent")
+    db.add(
+        UserLoginLog(
+            id=new_uuid(),
+            user_id=user.id,
+            role_code=role_code,
+            auth_event_type=event_type,
+            auth_method=auth_method,
+            email=user.email,
+            ip_address=ip_addr[:64] if ip_addr else None,
+            user_agent=ua[:500] if ua else None,
+        )
     )
 
 
@@ -232,7 +309,7 @@ def check_existing_account(
     request: Request,
     db: Session = Depends(get_db),
 ) -> AccountCheckResponse:
-    """Check whether an email already exists in the HunarLink DB before registration/login."""
+    """Check whether an email already exists in the HunarLink DB and enforce role isolation."""
     client_ip = request.client.host if request.client else "unknown"
     allowed, retry_after = _account_check_limiter.allow(f"check-account:{client_ip}")
     if not allowed:
@@ -246,29 +323,61 @@ def check_existing_account(
     if user is None:
         return AccountCheckResponse(exists=False)
 
-    role_codes = sorted(
-        set(
-            db.scalars(
-                select(PlatformRole.code)
-                .join(
-                    UserRoleAssignment,
-                    UserRoleAssignment.platform_role_id == PlatformRole.id,
-                )
-                .where(
-                    UserRoleAssignment.user_id == user.id,
-                    UserRoleAssignment.assignment_status == "ACTIVE",
-                    PlatformRole.is_active == True,  # noqa: E712
-                )
-            ).all()
-        )
-    )
+    role_codes = _get_user_active_roles(db, user.id)
     seller = db.scalar(select(SellerProfile).where(SellerProfile.user_id == user.id))
+    is_admin = _is_admin_account(db, user.id, role_codes)
+    is_buyer = "CUSTOMER" in role_codes
+    is_artisan = ("DIRECT_SELLER" in role_codes) or (seller is not None)
+
+    has_requested_role: bool | None = None
+    role_conflict = False
+    conflict_message: str | None = None
+
+    if payload.requested_role == "buyer":
+        if is_admin:
+            has_requested_role = False
+            role_conflict = True
+            conflict_message = (
+                "This email belongs to an Administrator account. Please sign in at /admin."
+            )
+        elif not is_buyer:
+            has_requested_role = False
+            role_conflict = True
+            conflict_message = (
+                "This email is registered as an Artisan (DIRECT_SELLER), not a Buyer. "
+                "Please switch to the Artisan role or register with a separate Buyer email."
+            )
+        else:
+            has_requested_role = True
+    elif payload.requested_role == "artisan":
+        if is_admin:
+            has_requested_role = False
+            role_conflict = True
+            conflict_message = (
+                "This email belongs to an Administrator account. Please sign in at /admin."
+            )
+        elif not is_artisan:
+            has_requested_role = False
+            role_conflict = True
+            conflict_message = (
+                "This email is registered as a Buyer (CUSTOMER), not an Artisan. "
+                "Please switch to Buyer or register with a separate Artisan email."
+            )
+        else:
+            has_requested_role = True
+
     return AccountCheckResponse(
         exists=True,
         roles=role_codes,
-        is_artisan=("DIRECT_SELLER" in role_codes) or (seller is not None),
+        is_buyer=is_buyer,
+        is_artisan=is_artisan,
+        is_admin=is_admin,
         artisan_verified=bool(seller is not None and seller.verification_status == "APPROVED"),
         artisan_verification_status=seller.verification_status if seller is not None else "UNVERIFIED",
+        has_requested_role=has_requested_role,
+        role_conflict=role_conflict,
+        conflict_message=conflict_message,
+        last_login_at=user.last_login_at,
     )
 
 
@@ -281,8 +390,11 @@ def sync_authenticated_user(
 ) -> AuthUserProfileResponse:
     """Upsert a Clerk-authenticated user into HunarLink's database (`users` + roles).
 
-    Called automatically by the frontend right after Clerk sign-in / sign-up so
-    every new Google/Apple/email user exists immediately in MySQL/SQLite.
+    Enforces strict role isolation:
+      - New registration grants ONLY the requested role (`CUSTOMER` or `DIRECT_SELLER`).
+      - Existing accounts cannot sign in under a different role (returns 403).
+      - Admin accounts (`admin_credentials` / `ADMIN`) cannot sign in via Buyer/Artisan portals.
+      - Records `REGISTER` vs `LOGIN` events in `user_login_logs` and `users.last_login_at`.
     """
     clerk_user_id = str(claims["sub"]).strip()
     clean_email = payload.email.strip().lower()
@@ -294,6 +406,7 @@ def sync_authenticated_user(
 
     user = db.scalar(select(User).where(User.clerk_user_id == clerk_user_id))
     is_new_user = False
+    role_code, role_name = ROLE_CODE_MAP[payload.requested_role]
 
     if user is None:
         existing_by_email = db.scalar(select(User).where(User.email == clean_email))
@@ -329,9 +442,19 @@ def sync_authenticated_user(
             display_name=display_name[:160],
             preferred_currency="INR",
             account_status="ACTIVE",
+            last_login_at=None,
         )
         db.add(user)
         db.flush()
+        _ensure_user_role(db, user.id, role_code, role_name)
+        _record_auth_event(
+            db,
+            user=user,
+            role_code=role_code,
+            event_type="REGISTER",
+            auth_method="clerk_signup" if payload.auth_mode == "signup" else "clerk_sync",
+            request=request,
+        )
     else:
         if payload.auth_mode == "signup":
             raise HTTPException(
@@ -343,6 +466,24 @@ def sync_authenticated_user(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Account is not active (status={user.account_status}).",
             )
+
+        existing_roles = _get_user_active_roles(db, user.id)
+        if _is_admin_account(db, user.id, existing_roles):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Administrator accounts must sign in through the dedicated /admin login portal.",
+            )
+        if payload.requested_role == "buyer" and "CUSTOMER" not in existing_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Role mismatch: this email is registered as an Artisan (DIRECT_SELLER), not a Buyer. Please sign in with the Artisan role.",
+            )
+        if payload.requested_role == "artisan" and "DIRECT_SELLER" not in existing_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Role mismatch: this email is registered as a Buyer (CUSTOMER), not an Artisan. Please register a separate Artisan account.",
+            )
+
         if payload.first_name.strip():
             user.first_name = payload.first_name.strip()[:100]
         if payload.last_name is not None:
@@ -353,15 +494,17 @@ def sync_authenticated_user(
             user.phone = payload.phone.strip()[:32]
         if payload.email_verified:
             user.email_verified = True
+        user.last_login_at = utcnow()
         user.updated_at = utcnow()
 
-    role_code, role_name = ROLE_CODE_MAP[payload.requested_role]
-    # Only grant/upgrade roles on registration or explicit sync — never mutate roles on plain sign-in
-    if is_new_user or payload.auth_mode != "signin":
-        _ensure_user_role(db, user.id, role_code, role_name)
-        # Artisans can also browse/purchase as customers, while buyers only get CUSTOMER.
-        if payload.requested_role == "artisan":
-            _ensure_user_role(db, user.id, "CUSTOMER", "Retail Customer")
+        _record_auth_event(
+            db,
+            user=user,
+            role_code=role_code,
+            event_type="LOGIN",
+            auth_method="clerk_signin" if payload.auth_mode == "signin" else "clerk_sync",
+            request=request,
+        )
 
     record_audit_log(
         db,
@@ -374,6 +517,7 @@ def sync_authenticated_user(
         new_values={
             "requested_role": payload.requested_role,
             "is_new_user": is_new_user,
+            "auth_event_type": "REGISTER" if is_new_user else "LOGIN",
         },
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
@@ -420,6 +564,11 @@ def submit_artisan_verification(
     user = db.scalar(select(User).where(User.id == principal.user_id))
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    if "DIRECT_SELLER" not in principal.roles:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only registered Artisan accounts (DIRECT_SELLER) can submit artisan verification. Please register a separate Artisan account.",
+        )
 
     normalized_path = "GI" if payload.verification_path == "GI" else "NON_GI"
     claimed_gi = (payload.claimed_gi_code or "").strip() or None
@@ -455,8 +604,6 @@ def submit_artisan_verification(
     if payload.phone and payload.phone.strip():
         user.phone = payload.phone.strip()[:32]
         user.updated_at = utcnow()
-
-    _ensure_user_role(db, user.id, "DIRECT_SELLER", "Direct Artisan Seller")
 
     seller = db.scalar(select(SellerProfile).where(SellerProfile.user_id == user.id))
     if seller is None:
@@ -741,6 +888,14 @@ def admin_password_login(
 
     cred.last_login_at = utcnow()
     user.last_login_at = utcnow()
+    _record_auth_event(
+        db,
+        user=user,
+        role_code="ADMIN",
+        event_type="LOGIN",
+        auth_method="admin_password",
+        request=request,
+    )
     record_audit_log(
         db,
         actor_user_id=user.id,

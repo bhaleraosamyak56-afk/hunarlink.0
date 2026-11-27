@@ -67,9 +67,12 @@ export default function AuthPage() {
   const [resubmitMode, setResubmitMode] = useState(params.get('edit') === '1');
 
   const [errMsg, setErrMsg] = useState(
-    notRegisteredNotice
-      ? 'No registered HunarLink Artisan account was found for that email. Please register as an Artisan below first.'
-      : ''
+    params.get('role_conflict') === '1'
+      ? params.get('conflict_msg') ||
+          'Role mismatch: this email is registered under a different role in HunarLink.'
+      : notRegisteredNotice
+        ? 'No registered HunarLink Artisan account was found for that email. Please register as an Artisan below first.'
+        : ''
   );
   const [busyProvider, setBusyProvider] = useState(null);
   const [submitting, setSubmitting] = useState(false);
@@ -80,7 +83,13 @@ export default function AuthPage() {
   );
 
   useEffect(() => {
-    if (params.get('not_registered') === '1') {
+    if (params.get('role_conflict') === '1') {
+      setAuthMode('signin');
+      setErrMsg(
+        params.get('conflict_msg') ||
+          'Role mismatch: this email is registered under a different role in HunarLink.'
+      );
+    } else if (params.get('not_registered') === '1') {
       setAuthMode('register');
       setErrMsg(
         'No registered HunarLink Artisan account was found for that email. Please register as an Artisan below first.'

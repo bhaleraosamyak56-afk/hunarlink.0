@@ -85,6 +85,8 @@ export default function AdminPage() {
     profile: null
   }));
   const [tab, setTab] = useState('overview');
+  const [roleFilter, setRoleFilter] = useState('buyers');
+  const [activityFilter, setActivityFilter] = useState('registered');
   const [loading, setLoading] = useState(false);
   const [revealedHashes, setRevealedHashes] = useState({});
   const [cardPreviewModal, setCardPreviewModal] = useState(null);
@@ -462,67 +464,217 @@ export default function AdminPage() {
           </div>
         </div>
 
-        {tab === 'overview' && (
-          <section className="fk-panel-card" style={{ padding: '1.25rem' }}>
-            <h2 style={{ marginBottom: '0.9rem', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-              <IconUsers size={18} /> Registered Users (Live DB)
-            </h2>
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.88rem' }}>
-                <thead>
-                  <tr style={{ textAlign: 'left', borderBottom: '1px solid rgba(0,0,0,0.1)' }}>
-                    <th style={{ padding: '0.55rem' }}>Name</th>
-                    <th style={{ padding: '0.55rem' }}>Email</th>
-                    <th style={{ padding: '0.55rem' }}>Identity ID</th>
-                    <th style={{ padding: '0.55rem' }}>Onboarding Stage</th>
-                    <th style={{ padding: '0.55rem' }}>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(ov.users || []).map((u) => (
-                    <tr key={u.id} style={{ borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
-                      <td style={{ padding: '0.55rem', fontWeight: 600 }}>{u.name}</td>
-                      <td style={{ padding: '0.55rem' }}>{u.email}</td>
-                      <td style={{ padding: '0.55rem', fontFamily: 'monospace', fontSize: '0.78rem' }}>{u.clerk_user_id}</td>
-                      <td style={{ padding: '0.55rem', fontSize: '0.78rem' }}>
-                        {u.onboarding_state === 'ADMIN' ? (
-                          <span
-                            style={{
-                              display: 'inline-block',
-                              padding: '0.16rem 0.52rem',
-                              borderRadius: '999px',
-                              background: 'rgba(20, 62, 48, 0.12)',
-                              color: '#143e30',
-                              fontWeight: 700,
-                              letterSpacing: '0.03em'
-                            }}
-                          >
-                            ADMIN
-                          </span>
-                        ) : u.onboarding_state === 'STEP_1_ONLY_NO_CARD_YET' ? (
-                          <span style={{ color: '#8a5300', fontWeight: 600 }}>
-                            Step 1 Signed In (Awaiting Card Upload on /auth?tab=verify)
-                          </span>
-                        ) : u.onboarding_state === 'SUBMITTED' ? (
-                          <span style={{ color: '#a34121', fontWeight: 600 }}>
-                            Pending Admin Review
-                          </span>
-                        ) : u.onboarding_state === 'APPROVED' ? (
-                          <span style={{ color: '#1b6d3f', fontWeight: 600 }}>
-                            Verified Artisan
-                          </span>
-                        ) : (
-                          <span style={{ opacity: 0.7 }}>{u.onboarding_state || 'BUYER'}</span>
-                        )}
-                      </td>
-                      <td style={{ padding: '0.55rem' }}>{u.account_status}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        )}
+        {tab === 'overview' && (() => {
+          const roleDir = ov.role_directory || {};
+          const roleTabs = [
+            { id: 'buyers', label: 'Buyers (CUSTOMER)', data: roleDir.buyers },
+            { id: 'artisans', label: 'Artisans (DIRECT_SELLER)', data: roleDir.artisans },
+            { id: 'wholesale', label: 'Wholesale / Dealers', data: roleDir.wholesale },
+            { id: 'admins', label: 'Admins (ADMIN)', data: roleDir.admins }
+          ];
+          const activeGroup = roleDir[roleFilter] || {
+            label: 'Users',
+            counts: { registered: 0, logged_in: 0, never_logged_in: 0, total_login_events: 0 },
+            registered: [],
+            logged_in: [],
+            never_logged_in: []
+          };
+          const selectedRows =
+            activityFilter === 'logged_in'
+              ? activeGroup.logged_in || []
+              : activityFilter === 'never_logged_in'
+                ? activeGroup.never_logged_in || []
+                : activeGroup.registered || [];
+          const roleCodeSetByFilter = {
+            buyers: new Set(['CUSTOMER']),
+            artisans: new Set(['DIRECT_SELLER']),
+            wholesale: new Set(['WHOLESALE_BUYER', 'DEALER', 'SUPPLIER']),
+            admins: new Set(['ADMIN'])
+          };
+          const filteredAuthEvents = (ov.recent_auth_events || []).filter((ev) => {
+            const allowed = roleCodeSetByFilter[roleFilter];
+            return !allowed || allowed.has(ev.role_code);
+          });
+
+          return (
+            <section className="fk-panel-card" style={{ padding: '1.25rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '1rem' }}>
+                <div>
+                  <h2 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                    <IconUsers size={18} /> Registered vs Logged-In Users by Role (Live DB)
+                  </h2>
+                  <p style={{ margin: '0.25rem 0 0', fontSize: '0.82rem', opacity: 0.76 }}>
+                    Separated directly from <code>users</code>, <code>user_role_assignments</code>, and{' '}
+                    <code>user_login_logs</code> with strict role isolation.
+                  </p>
+                </div>
+                <div style={{ fontSize: '0.82rem', fontWeight: 600, opacity: 0.85 }}>
+                  Total Logged-In Accounts: {ov.counts?.logged_in_users ?? 0} / {ov.counts?.users ?? 0}
+                </div>
+              </div>
+
+              {/* Per-role summary cards */}
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(195px, 1fr))',
+                  gap: '0.75rem',
+                  marginBottom: '1.1rem'
+                }}
+              >
+                {roleTabs.map((rt) => {
+                  const counts = rt.data?.counts || { registered: 0, logged_in: 0, never_logged_in: 0 };
+                  const isActive = roleFilter === rt.id;
+                  return (
+                    <button
+                      key={rt.id}
+                      type="button"
+                      onClick={() => setRoleFilter(rt.id)}
+                      style={{
+                        textAlign: 'left',
+                        padding: '0.85rem 1rem',
+                        borderRadius: '10px',
+                        cursor: 'pointer',
+                        background: isActive ? 'rgba(20, 62, 48, 0.08)' : '#faf7f2',
+                        border: isActive ? '1.5px solid #143e30' : '1px solid rgba(0,0,0,0.1)'
+                      }}
+                    >
+                      <div style={{ fontSize: '0.75rem', fontWeight: 700, opacity: 0.75 }}>{rt.label}</div>
+                      <div style={{ display: 'flex', gap: '1rem', marginTop: '0.35rem', fontSize: '0.85rem' }}>
+                        <span><strong>{counts.registered}</strong> Registered</span>
+                        <span style={{ color: '#1b6d3f' }}><strong>{counts.logged_in}</strong> Logged In</span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Activity split selector */}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem', marginBottom: '1rem' }}>
+                {[
+                  { id: 'registered', label: `All Registered (${activeGroup.counts?.registered ?? 0})` },
+                  { id: 'logged_in', label: `Logged-In Users (${activeGroup.counts?.logged_in ?? 0})` },
+                  { id: 'never_logged_in', label: `Registered Only / Never Logged In (${activeGroup.counts?.never_logged_in ?? 0})` },
+                  { id: 'events', label: `Login & Registration Logs (${filteredAuthEvents.length})` }
+                ].map((f) => (
+                  <button
+                    key={f.id}
+                    type="button"
+                    className={activityFilter === f.id ? 'btn-orange' : 'btn-orange-outline'}
+                    style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}
+                    onClick={() => setActivityFilter(f.id)}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+
+              {activityFilter === 'events' ? (
+                filteredAuthEvents.length === 0 ? (
+                  <p style={{ opacity: 0.7 }}>No registration or login events recorded for this role yet.</p>
+                ) : (
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.86rem' }}>
+                      <thead>
+                        <tr style={{ textAlign: 'left', borderBottom: '1px solid rgba(0,0,0,0.1)' }}>
+                          <th style={{ padding: '0.55rem' }}>Event</th>
+                          <th style={{ padding: '0.55rem' }}>User</th>
+                          <th style={{ padding: '0.55rem' }}>Role</th>
+                          <th style={{ padding: '0.55rem' }}>Method</th>
+                          <th style={{ padding: '0.55rem' }}>IP</th>
+                          <th style={{ padding: '0.55rem' }}>Timestamp</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredAuthEvents.map((ev) => (
+                          <tr key={ev.id} style={{ borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
+                            <td style={{ padding: '0.55rem', fontWeight: 700 }}>
+                              <span
+                                style={{
+                                  padding: '0.16rem 0.5rem',
+                                  borderRadius: '999px',
+                                  fontSize: '0.72rem',
+                                  background: ev.auth_event_type === 'LOGIN' ? 'rgba(27,109,63,0.12)' : 'rgba(163,65,33,0.12)',
+                                  color: ev.auth_event_type === 'LOGIN' ? '#1b6d3f' : '#a34121'
+                                }}
+                              >
+                                {ev.auth_event_type}
+                              </span>
+                            </td>
+                            <td style={{ padding: '0.55rem' }}>
+                              <div style={{ fontWeight: 600 }}>{ev.name}</div>
+                              <div style={{ fontSize: '0.76rem', opacity: 0.75 }}>{ev.email}</div>
+                            </td>
+                            <td style={{ padding: '0.55rem', fontFamily: 'monospace', fontSize: '0.78rem' }}>{ev.role_code}</td>
+                            <td style={{ padding: '0.55rem', fontSize: '0.8rem' }}>{ev.auth_method}</td>
+                            <td style={{ padding: '0.55rem', fontFamily: 'monospace', fontSize: '0.76rem' }}>{ev.ip_address || '—'}</td>
+                            <td style={{ padding: '0.55rem', fontSize: '0.8rem' }}>
+                              {ev.created_at ? new Date(ev.created_at).toLocaleString() : '—'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )
+              ) : selectedRows.length === 0 ? (
+                <p style={{ opacity: 0.7 }}>No users in this role &amp; login status category yet.</p>
+              ) : (
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.87rem' }}>
+                    <thead>
+                      <tr style={{ textAlign: 'left', borderBottom: '1px solid rgba(0,0,0,0.1)' }}>
+                        <th style={{ padding: '0.55rem' }}>Name</th>
+                        <th style={{ padding: '0.55rem' }}>Email</th>
+                        <th style={{ padding: '0.55rem' }}>Role</th>
+                        <th style={{ padding: '0.55rem' }}>Login Status</th>
+                        <th style={{ padding: '0.55rem' }}>Last Login</th>
+                        <th style={{ padding: '0.55rem' }}>Registered</th>
+                        <th style={{ padding: '0.55rem' }}>Account</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedRows.map((u) => (
+                        <tr key={`${u.user_id}-${u.role_code}`} style={{ borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
+                          <td style={{ padding: '0.55rem', fontWeight: 600 }}>
+                            <div>{u.name}</div>
+                            {u.store_name && (
+                              <div style={{ fontSize: '0.75rem', opacity: 0.75 }}>
+                                {u.store_name} ({u.verification_status})
+                              </div>
+                            )}
+                          </td>
+                          <td style={{ padding: '0.55rem' }}>{u.email}</td>
+                          <td style={{ padding: '0.55rem', fontFamily: 'monospace', fontSize: '0.76rem' }}>
+                            {u.role_code}
+                          </td>
+                          <td style={{ padding: '0.55rem', fontSize: '0.78rem' }}>
+                            {u.has_logged_in ? (
+                              <span style={{ color: '#1b6d3f', fontWeight: 700 }}>
+                                Logged In ({u.login_count}x)
+                              </span>
+                            ) : (
+                              <span style={{ color: '#8a5300', fontWeight: 600 }}>
+                                Registered Only
+                              </span>
+                            )}
+                          </td>
+                          <td style={{ padding: '0.55rem', fontSize: '0.8rem' }}>
+                            {u.last_login_at ? new Date(u.last_login_at).toLocaleString() : 'Never'}
+                          </td>
+                          <td style={{ padding: '0.55rem', fontSize: '0.8rem' }}>
+                            {u.registered_at ? new Date(u.registered_at).toLocaleDateString() : '—'}
+                          </td>
+                          <td style={{ padding: '0.55rem' }}>{u.account_status}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+          );
+        })()}
 
         {tab === 'applications' && (
           <section className="fk-panel-card" style={{ padding: '1.25rem' }}>

@@ -168,10 +168,14 @@ export function syncAuthenticatedUser(payload, token) {
   return apiRequest('/api/v1/auth/sync', { method: 'POST', body: payload, token });
 }
 
-export function checkAuthAccount(email) {
+export function checkAuthAccount(email, requestedRole = null) {
+  const body = { email };
+  if (requestedRole) {
+    body.requested_role = requestedRole;
+  }
   return apiRequest('/api/v1/auth/check-account', {
     method: 'POST',
-    body: { email }
+    body
   });
 }
 
@@ -325,6 +329,14 @@ export function adminPasswordLogin({ email, password }) {
 
 export function fetchAdminOverview(token) {
   return apiRequest('/api/v1/admin/overview', { token });
+}
+
+export function fetchAdminUsersByRole(token, { roleCode = null, activity = 'all' } = {}) {
+  const params = new URLSearchParams();
+  if (roleCode) params.set('role_code', roleCode);
+  if (activity) params.set('activity', activity);
+  const qs = params.toString() ? `?${params.toString()}` : '';
+  return apiRequest(`/api/v1/admin/users-by-role${qs}`, { token });
 }
 
 export function fetchAdminPayments(token, { orderScope = null, paymentStatus = null } = {}) {
