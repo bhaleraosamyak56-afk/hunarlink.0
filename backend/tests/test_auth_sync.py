@@ -1234,3 +1234,252 @@ def test_14_self_delete_server_side_clerk_password_verification(
 
     app.dependency_overrides.pop(get_current_principal, None)
     app.dependency_overrides.pop(get_settings, None)
+
+
+def test_15_admin_delete_user_cleans_db_and_deletes_clerk_automatically(
+    app_and_client, db_session, monkeypatch
+):
+    from pydantic import SecretStr
+    from app.core.auth import AuthenticatedPrincipal, load_principal_by_clerk_id
+    from app.core.config import get_settings
+    from app.models.core_models import SellerProfile, UserAddress, UserLoginLog
+
+    app, client = app_and_client
+
+    # 1. Register a Buyer + add an address & a LOGIN event
+    _set_clerk_claims(app, {"sub": "user_admin_del_b01", "email": "admin.del.buyer@example.com"})
+    reg_b = client.post(
+        "/api/v1/auth/sync",
+        json={
+            "email": "admin.del.buyer@example.com",
+            "first_name": "Karan",
+            "requested_role": "buyer",
+            "auth_mode": "signup",
+        },
+    )
+    assert reg_b.status_code == 200
+    buyer_uid = reg_b.json()["user_id"]
+
+    # Login event
+    assert (
+        client.post(
+            "/api/v1/auth/sync",
+            json={
+                "email": "admin.del.buyer@example.com",
+                "first_name": "Karan",
+                "requested_role": "buyer",
+                "auth_mode": "signin",
+            },
+        ).status_code
+        == 200
+    )
+    _set_clerk_claims(app, None)
+
+    buyer_principal = load_principal_by_clerk_id(db_session, "user_admin_del_b01")
+    set_authenticated_principal(app, buyer_principal)
+    assert (
+        client.post(
+            "/api/v1/auth/addresses",
+            json={
+                "address_label": "HOME",
+                "recipient_name": "Karan",
+                "recipient_phone": "9999999999",
+                "line1": "10 Boulevard Rd",
+                "city": "Srinagar",
+                "state_province": "Jammu and Kashmir",
+                "postal_code": "190001",
+            },
+        ).status_code
+        == 201
+    )
+
+    # Non-admin cannot delete via admin endpoint
+    forbid = client.delete(f"/api/v1/admin/users/{buyer_uid}")
+    assert forbid.status_code == 403
+    app.dependency_overrides.pop(get_current_principal, None)
+
+    # 2. Register an Artisan with a SellerProfile
+    _set_clerk_claims(app, {"sub": "user_admin_del_a01", "email": "admin.del.artisan@example.com"})
+    reg_a = client.post(
+        "/api/v1/auth/sync",
+        json={
+            "email": "admin.del.artisan@example.com",
+            "first_name": "Farooq",
+            "requested_role": "artisan",
+            "auth_mode": "signup",
+        },
+    )
+    assert reg_a.status_code == 200
+    artisan_uid = reg_a.json()["user_id"]
+    _set_clerk_claims(app, None)
+    db_session.add(
+        SellerProfile(
+            user_id=artisan_uid,
+            store_name="Farooq Test Studio",
+            store_slug="farooq-test-studio",
+            craft_specialty="Papier-Mache",
+            workshop_district="Srinagar",
+            verification_path="GI",
+            verification_status="APPROVED",
+            profile_status="ACTIVE",
+        )
+    )
+    db_session.commit()
+
+    # 3. Mock Clerk secret & HTTP calls for automatic Clerk deletion
+    settings = get_settings()
+    monkeypatch.setattr(settings, "clerk_secret_key", SecretStr("sk_test_admin_del"))
+    app.dependency_overrides[get_settings] = lambda: settings
+
+    class _MockResp:
+        def __init__(self, status_code, data=None):
+            self.status_code = status_code
+            self._data = data or []
+
+        def json(self):
+            return self._data
+
+    deleted_urls = []
+
+    def _fake_get(url, headers=None, params=None, timeout=None):
+        return _MockResp(200, [])
+
+    def _fake_delete(url, headers=None, timeout=None):
+        deleted_urls.append(url)
+        return _MockResp(200, {"deleted": True})
+
+    monkeypatch.setattr("app.modules.auth.deletion.httpx.get", _fake_get)
+    monkeypatch.setattr("app.modules.auth.deletion.httpx.delete", _fake_delete)
+
+    admin_principal = AuthenticatedPrincipal(
+        user_id="00000000-0000-0000-0000-000000000099",
+        clerk_user_id="hl_admin_test_99",
+        email="ops.admin@hunarlink.in",
+        account_status="ACTIVE",
+        roles=frozenset({"ADMIN"}),
+        admin_permissions=frozenset({"payments.read", "guardrails.decide"}),
+        is_active_admin=True,
+    )
+    set_authenticated_principal(app, admin_principal)
+
+    # Delete Buyer via POST alias
+    del_b = client.post(
+        f"/api/v1/admin/users/{buyer_uid}/delete",
+        json={"reason": "Cleanup test buyer"},
+    )
+    assert del_b.status_code == 200
+    assert del_b.json()["deleted"] is True
+    assert del_b.json()["clerk_deleted"] is True
+    assert "https://api.clerk.com/v1/users/user_admin_del_b01" in deleted_urls
+
+    # Delete Artisan via REST DELETE
+    del_a = client.delete(f"/api/v1/admin/users/{artisan_uid}")
+    assert del_a.status_code == 200
+    assert del_a.json()["deleted"] is True
+    assert del_a.json()["clerk_deleted"] is True
+    assert "https://api.clerk.com/v1/users/user_admin_del_a01" in deleted_urls
+
+    # Verify DB cleanup + Admin overview hides both users and seller profile
+    assert list(db_session.scalars(select(UserAddress).where(UserAddress.user_id == buyer_uid)).all()) == []
+    assert list(db_session.scalars(select(UserLoginLog).where(UserLoginLog.user_id == buyer_uid)).all()) == []
+    sp = db_session.scalar(select(SellerProfile).where(SellerProfile.user_id == artisan_uid))
+    assert sp.profile_status == "TERMINATED"
+
+    ov = client.get("/api/v1/admin/overview")
+    assert ov.status_code == 200
+    ov_data = ov.json()
+    active_ids = {u["id"] for u in ov_data["users"]}
+    assert buyer_uid not in active_ids
+    assert artisan_uid not in active_ids
+    assert all(s["id"] != sp.id for s in ov_data["sellers"])
+
+    # Original emails are completely free for fresh registration
+    chk = client.post("/api/v1/auth/check-account", json={"email": "admin.del.buyer@example.com"})
+    assert chk.status_code == 200
+    assert chk.json()["exists"] is False
+
+    app.dependency_overrides.pop(get_current_principal, None)
+    app.dependency_overrides.pop(get_settings, None)
+
+
+def test_16_cli_purge_clean_user_and_orphaned_clerk_cleanup(
+    db_session, monkeypatch
+):
+    from app.models.core_models import PlatformRole, UserRoleAssignment
+    from app.modules.auth.deletion import delete_clerk_account, execute_user_deletion
+
+    # 1. User with NO audit_logs or order history -> cleanly purged from `users`
+    role = db_session.scalar(select(PlatformRole).where(PlatformRole.code == "CUSTOMER"))
+    if role is None:
+        role = PlatformRole(code="CUSTOMER", name="Retail Customer", is_active=True)
+        db_session.add(role)
+        db_session.flush()
+
+    clean_user = User(
+        clerk_user_id="user_clean_purge_01",
+        email="clean.purge@example.com",
+        first_name="Amaan",
+        display_name="Amaan",
+        account_status="ACTIVE",
+    )
+    db_session.add(clean_user)
+    db_session.flush()
+    db_session.add(
+        UserRoleAssignment(
+            user_id=clean_user.id,
+            platform_role_id=role.id,
+            assignment_status="ACTIVE",
+        )
+    )
+    db_session.commit()
+    clean_uid = clean_user.id
+
+    class _MockResp:
+        def __init__(self, status_code, data=None):
+            self.status_code = status_code
+            self._data = data or []
+
+        def json(self):
+            return self._data
+
+    deleted_urls = []
+
+    def _fake_get(url, headers=None, params=None, timeout=None):
+        if params and params.get("email_address") == "orphan@example.com":
+            return _MockResp(200, [{"id": "user_orphan_clerk_99"}])
+        return _MockResp(200, [])
+
+    def _fake_delete(url, headers=None, timeout=None):
+        deleted_urls.append(url)
+        return _MockResp(200, {"deleted": True})
+
+    monkeypatch.setattr("app.modules.auth.deletion.httpx.get", _fake_get)
+    monkeypatch.setattr("app.modules.auth.deletion.httpx.delete", _fake_delete)
+
+    res = execute_user_deletion(
+        db_session,
+        user=clean_user,
+        actor_user_id=None,
+        actor_role="ADMIN",
+        reason="CLI purge",
+        clerk_secret="sk_test_cli",
+        allow_purge_if_clean=True,
+        audit_action="CLI_USER_DELETED",
+        self_delete_mode=False,
+    )
+    assert res.purged is True
+    assert res.clerk_deleted is True
+    assert db_session.scalar(select(User).where(User.id == clean_uid)) is None
+    assert "https://api.clerk.com/v1/users/user_clean_purge_01" in deleted_urls
+
+    # 2. Orphaned Clerk user (row already deleted from DB) -> found by email and deleted automatically
+    ok, cnt = delete_clerk_account(
+        None,
+        "orphan@example.com",
+        "sk_test_cli",
+        also_search_email=True,
+    )
+    assert ok is True
+    assert cnt == 1
+    assert "https://api.clerk.com/v1/users/user_orphan_clerk_99" in deleted_urls
+

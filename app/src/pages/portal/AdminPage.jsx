@@ -7,6 +7,7 @@ import {
   canAttemptBackend,
   decideAdminArtisanApplication,
   decideAdminGuardrailCase,
+  deleteAdminUser,
   fetchAdminGuardrailCases,
   fetchAdminGuardrailRules,
   fetchAdminOverview,
@@ -91,6 +92,8 @@ export default function AdminPage() {
   const [revealedHashes, setRevealedHashes] = useState({});
   const [cardPreviewModal, setCardPreviewModal] = useState(null);
   const [busyAppId, setBusyAppId] = useState(null);
+  const [deleteConfirmUser, setDeleteConfirmUser] = useState(null);
+  const [busyDeleteUserId, setBusyDeleteUserId] = useState(null);
   const [data, setData] = useState({
     overview: null,
     payments: [],
@@ -248,6 +251,29 @@ export default function AdminPage() {
       loadLiveAdminData(adminToken);
     } catch (err) {
       toast(err?.message || 'Could not update listing status.', 'error');
+    }
+  }
+
+  async function handleConfirmDeleteUser() {
+    if (!deleteConfirmUser) return;
+    setBusyDeleteUserId(deleteConfirmUser.user_id);
+    try {
+      const res = await deleteAdminUser(
+        deleteConfirmUser.user_id,
+        { reason: `Removed from Admin Console by ${authState.email || 'admin'}` },
+        adminToken
+      );
+      toast(
+        res?.message ||
+          `Deleted ${deleteConfirmUser.email} from HunarLink DB${res?.clerk_deleted ? ' & Clerk' : ''}.`,
+        'success'
+      );
+      setDeleteConfirmUser(null);
+      await loadLiveAdminData(adminToken);
+    } catch (err) {
+      toast(err?.message || 'Could not delete user.', 'error');
+    } finally {
+      setBusyDeleteUserId(null);
     }
   }
 
@@ -631,6 +657,7 @@ export default function AdminPage() {
                         <th style={{ padding: '0.55rem' }}>Last Login</th>
                         <th style={{ padding: '0.55rem' }}>Registered</th>
                         <th style={{ padding: '0.55rem' }}>Account</th>
+                        <th style={{ padding: '0.55rem' }}>Actions</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -666,6 +693,26 @@ export default function AdminPage() {
                             {u.registered_at ? new Date(u.registered_at).toLocaleDateString() : '—'}
                           </td>
                           <td style={{ padding: '0.55rem' }}>{u.account_status}</td>
+                          <td style={{ padding: '0.55rem' }}>
+                            {u.role_code === 'ADMIN' ? (
+                              <span style={{ fontSize: '0.75rem', opacity: 0.6 }}>Protected</span>
+                            ) : (
+                              <button
+                                type="button"
+                                className="btn-orange-outline"
+                                style={{
+                                  padding: '0.28rem 0.6rem',
+                                  fontSize: '0.75rem',
+                                  borderColor: '#b33818',
+                                  color: '#b33818'
+                                }}
+                                disabled={busyDeleteUserId === u.user_id}
+                                onClick={() => setDeleteConfirmUser(u)}
+                              >
+                                Delete (DB + Clerk)
+                              </button>
+                            )}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -1270,6 +1317,67 @@ export default function AdminPage() {
           <AdminCraftProofTab adminToken={adminToken} toast={toast} />
         )}
       </main>
+
+      {deleteConfirmUser && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 9999,
+            background: 'rgba(18, 16, 14, 0.72)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '1.25rem'
+          }}
+          onClick={() => !busyDeleteUserId && setDeleteConfirmUser(null)}
+        >
+          <div
+            className="fk-panel-card"
+            style={{
+              maxWidth: '480px',
+              width: '100%',
+              padding: '1.35rem',
+              background: '#fff'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ marginTop: 0, color: '#9f2a0f' }}>
+              Delete User from DB &amp; Clerk?
+            </h3>
+            <p style={{ fontSize: '0.88rem', lineHeight: 1.5, marginBottom: '0.9rem' }}>
+              You are about to remove <strong>{deleteConfirmUser.name}</strong> (
+              <code>{deleteConfirmUser.email}</code>, role <code>{deleteConfirmUser.role_code}</code>).
+            </p>
+            <p style={{ fontSize: '0.82rem', opacity: 0.78, marginBottom: '1.1rem' }}>
+              This safely cleans/anonymizes their MySQL records without breaking order or audit
+              integrity, frees their email for future registration, and{' '}
+              <strong>automatically deletes their account from Clerk</strong>.
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem' }}>
+              <button
+                type="button"
+                className="btn-orange-outline"
+                disabled={Boolean(busyDeleteUserId)}
+                onClick={() => setDeleteConfirmUser(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-orange"
+                style={{ background: '#b33818', borderColor: '#b33818' }}
+                disabled={Boolean(busyDeleteUserId)}
+                onClick={handleConfirmDeleteUser}
+              >
+                {busyDeleteUserId ? 'Deleting…' : 'Confirm Delete (DB + Clerk)'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {cardPreviewModal && (
         <div

@@ -431,7 +431,10 @@ function ClerkBridgeInner({ children }) {
         await hydrateFromBackend(token);
         return res;
       } catch (err) {
-        if (err?.status === 403) {
+        const isDeactivatedError =
+          err?.status === 403 &&
+          /not active|DEACTIVATED/i.test(err?.message || '');
+        if (err?.status === 403 && !isDeactivatedError) {
           conflictSigningOutRef.current = true;
           clearPendingClerkRole();
           clearPendingClerkAuthMode();
@@ -459,8 +462,8 @@ function ClerkBridgeInner({ children }) {
           );
           return null;
         }
-        if (err?.status === 404) {
-          // Strict DB login check: email/user does NOT exist in HunarLink DB ->
+        if (err?.status === 404 || err?.status === 401 || isDeactivatedError) {
+          // Strict DB login check: user does NOT exist (or was deleted/deactivated) ->
           // sign out Clerk immediately and redirect to Register page for the respective role!
           conflictSigningOutRef.current = true;
           clearPendingClerkRole();
@@ -477,10 +480,11 @@ function ClerkBridgeInner({ children }) {
             /* ignore */
           }
           conflictSigningOutRef.current = false;
+          const queryFlag = isDeactivatedError ? 'account_deleted=1' : 'not_registered=1';
           const registerDest =
             requestedRole === 'artisan'
-              ? '/auth?mode=register&not_registered=1'
-              : '/register?not_registered=1';
+              ? `/auth?mode=register&${queryFlag}`
+              : `/register?${queryFlag}`;
           navigate(registerDest, { replace: true });
           return null;
         }

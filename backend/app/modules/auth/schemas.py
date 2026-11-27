@@ -102,8 +102,16 @@ class DeleteAccountRequest(BaseModel):
 class DeleteAccountResponse(BaseModel):
     deleted: bool = True
     anonymized: bool = True
+    purged: bool = False
     clerk_deleted: bool = False
+    clerk_deleted_count: int = 0
     message: str
+
+
+class AdminDeleteUserRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str | None = Field(default=None, max_length=500)
 
 
 class ArtisanVerificationSubmitRequest(BaseModel):

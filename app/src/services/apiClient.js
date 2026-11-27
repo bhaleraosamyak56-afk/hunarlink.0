@@ -350,6 +350,16 @@ export function fetchAdminUsersByRole(token, { roleCode = null, activity = 'all'
   return apiRequest(`/api/v1/admin/users-by-role${qs}`, { token });
 }
 
+export function deleteAdminUser(userId, { reason = null } = {}, token) {
+  const body = {};
+  if (reason) body.reason = reason;
+  return apiRequest(`/api/v1/admin/users/${encodeURIComponent(userId)}/delete`, {
+    method: 'POST',
+    body,
+    token
+  });
+}
+
 export function fetchAdminPayments(token, { orderScope = null, paymentStatus = null } = {}) {
   const params = new URLSearchParams();
   if (orderScope) params.set('order_scope', orderScope);

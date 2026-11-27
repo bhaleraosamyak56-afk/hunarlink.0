@@ -16,7 +16,7 @@ import uuid
 from collections import defaultdict
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response, status
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
@@ -46,6 +46,8 @@ from app.models.core_models import (
     UserRoleAssignment,
 )
 from app.models.guardrail_models import FileSecurityScan
+from app.modules.auth.deletion import execute_user_deletion
+from app.modules.auth.schemas import AdminDeleteUserRequest, DeleteAccountResponse
 from app.modules.guardrails import repository as guardrail_repo, service as guardrail_service
 from app.modules.guardrails.schemas import (
     GuardrailOutcome,
@@ -795,8 +797,14 @@ def admin_live_overview(
         )
     ]
     deactivated_count = len(all_users) - len(users)
-    sellers = list(db.scalars(select(SellerProfile).order_by(SellerProfile.created_at.desc()).limit(200)).all())
-    applications = list(
+    active_user_ids = {u.id for u in users}
+    all_sellers = list(db.scalars(select(SellerProfile).order_by(SellerProfile.created_at.desc()).limit(200)).all())
+    sellers = [
+        s
+        for s in all_sellers
+        if s.profile_status != "TERMINATED" and s.user_id in active_user_ids
+    ]
+    all_applications = list(
         db.scalars(
             select(SellerVerificationApplication)
             .order_by(SellerVerificationApplication.created_at.desc())
@@ -826,8 +834,15 @@ def admin_live_overview(
             roles_by_user_id[uid].append(rcode)
 
     users_by_id = {u.id: u for u in all_users}
-    sellers_by_id = {s.id: s for s in sellers}
+    sellers_by_id = {s.id: s for s in all_sellers}
     seller_by_user_id = {s.user_id: s for s in sellers}
+    applications = [
+        app_row
+        for app_row in all_applications
+        if app_row.seller_profile_id in sellers_by_id
+        and sellers_by_id[app_row.seller_profile_id].user_id in active_user_ids
+        and sellers_by_id[app_row.seller_profile_id].profile_status != "TERMINATED"
+    ]
     active_admin_user_ids = {ac.user_id for ac in admin_creds if ac.is_active}
     docs_by_app_id: dict[str, list[SellerDocument]] = defaultdict(list)
     for d in seller_docs:
@@ -1258,6 +1273,101 @@ def admin_users_by_role(
         "groups": result_groups,
         "recent_auth_events": filtered_events,
     }
+
+
+def _execute_admin_delete_user(
+    *,
+    user_id: str,
+    payload: AdminDeleteUserRequest,
+    request: Request,
+    admin: AuthenticatedPrincipal,
+    db: Session,
+    settings: Settings,
+) -> DeleteAccountResponse:
+    if not _UUID_RE.match(user_id):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Invalid user UUID format.",
+        )
+    if user_id == admin.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrators cannot delete their own admin account here.",
+        )
+    target = db.scalar(select(User).where(User.id == user_id))
+    if target is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found in database.",
+        )
+    if target.account_status == "DEACTIVATED" and target.email.endswith("@deleted.hunarlink.local"):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User account has already been deleted.",
+        )
+
+    clerk_secret = settings.clerk_secret_key.get_secret_value().strip()
+    result = execute_user_deletion(
+        db,
+        user=target,
+        actor_user_id=admin.user_id,
+        actor_role="ADMIN",
+        reason=payload.reason or f"Deleted by administrator {admin.email}",
+        request=request,
+        clerk_secret=clerk_secret,
+        current_password=None,
+        allow_purge_if_clean=True,
+        audit_action="ADMIN_USER_DELETED",
+        self_delete_mode=False,
+    )
+    return DeleteAccountResponse(
+        deleted=True,
+        anonymized=result.anonymized,
+        purged=result.purged,
+        clerk_deleted=result.clerk_deleted,
+        clerk_deleted_count=result.clerk_deleted_count,
+        message=result.message,
+    )
+
+
+@router.delete("/admin/users/{user_id}", response_model=DeleteAccountResponse)
+def admin_delete_user_rest(
+    user_id: str,
+    request: Request,
+    payload: AdminDeleteUserRequest | None = Body(default=None),
+    admin: AuthenticatedPrincipal = Depends(require_admin_permission("guardrails.decide")),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> DeleteAccountResponse:
+    """Safely delete/anonymize a user in DB AND automatically delete them from Clerk."""
+    return _execute_admin_delete_user(
+        user_id=user_id,
+        payload=payload or AdminDeleteUserRequest(),
+        request=request,
+        admin=admin,
+        db=db,
+        settings=settings,
+    )
+
+
+@router.post("/admin/users/{user_id}/delete", response_model=DeleteAccountResponse)
+def admin_delete_user_post(
+    user_id: str,
+    request: Request,
+    payload: AdminDeleteUserRequest | None = Body(default=None),
+    admin: AuthenticatedPrincipal = Depends(require_admin_permission("guardrails.decide")),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> DeleteAccountResponse:
+    """POST alias for deleting a user cleanly from DB and Clerk."""
+    return _execute_admin_delete_user(
+        user_id=user_id,
+        payload=payload or AdminDeleteUserRequest(),
+        request=request,
+        admin=admin,
+        db=db,
+        settings=settings,
+    )
 
 
 _GUILD_CATEGORIES: dict[str, tuple[str, str, bool]] = {
