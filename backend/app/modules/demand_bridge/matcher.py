@@ -1,9 +1,9 @@
-"""Demand Bridge: AI Brief Structuring + 100% Deterministic Multi-Artisan Cluster Matcher.
+"""Demand Bridge: Deterministic Brief Structuring + Multi-Artisan Cluster Matcher.
 
-Architecture split:
-  - Step A (`parse_buyer_brief`): Local Ollama (`qwen2.5:3b`) extracts structured JSON from a messy
-    natural-language wholesale/corporate brief (with deterministic regex fallback).
-  - Step B (`match_demand_to_artisans`): ZERO LLM! Pure deterministic scoring over MySQL
+Architecture:
+  - Step A (`parse_buyer_brief`): Pure deterministic parser extracting structured specs
+    from natural-language wholesale/corporate briefs.
+  - Step B (`match_demand_to_artisans`): Pure deterministic scoring over MySQL
     `seller_profiles` + `artisan_capabilities` + `craft_passports`.
   - Smart Multi-Artisan Cluster Pooling: When requested volume exceeds any single rural workshop's
     capacity, automatically pools 2–5 compatible workshops into a unified fulfillment cluster.
@@ -11,7 +11,6 @@ Architecture split:
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 from decimal import Decimal
 from typing import Any
@@ -19,7 +18,6 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.core.config import Settings
 from app.models.base import utcnow
 from app.models.core_models import SellerProductListing, SellerProfile
 from app.models.craftproof_models import (
@@ -29,7 +27,6 @@ from app.models.craftproof_models import (
     CraftPassport,
     DemandArtisanMatch,
 )
-from app.modules.ai.provider import LocalAIGateway
 from app.modules.demand_bridge.schemas import DemandMatchIn
 
 _CATEGORY_KEYWORDS: list[tuple[tuple[str, ...], str, str]] = [
@@ -142,93 +139,12 @@ def _deterministic_parse_brief(raw_text: str) -> dict[str, Any]:
     }
 
 
-def parse_buyer_brief(settings: Settings, raw_request_text: str) -> dict[str, Any]:
-    """Use Local Ollama (`qwen2.5:3b`) + deterministic guardrails to parse a bulk buyer brief."""
-    baseline = _deterministic_parse_brief(raw_request_text)
-    gateway = LocalAIGateway(settings)
-
-    schema = {
-        "type": "object",
-        "properties": {
-            "category_slug": {
-                "type": ["string", "null"],
-                "enum": [
-                    "pashmina",
-                    "kani-shawls",
-                    "walnut-wood",
-                    "kashmiri-carpets",
-                    "papier-mache",
-                    "copperware",
-                    "saffron-pampore",
-                    "crewel-embroidery",
-                    None,
-                ],
-            },
-            "craft_technique": {"type": ["string", "null"]},
-            "requested_quantity": {"type": ["integer", "null"]},
-            "budget_min_inr": {"type": ["number", "null"]},
-            "budget_max_inr": {"type": ["number", "null"]},
-            "target_delivery_days": {"type": ["integer", "null"]},
-            "preferred_district": {"type": ["string", "null"]},
-            "requires_verified_claims": {"type": "boolean"},
-            "customization_notes": {"type": ["string", "null"]},
-            "ambiguous_fields": {"type": "array", "items": {"type": "string"}},
-        },
-        "required": [
-            "category_slug",
-            "requested_quantity",
-            "budget_min_inr",
-            "budget_max_inr",
-            "target_delivery_days",
-            "requires_verified_claims",
-            "ambiguous_fields",
-        ],
-    }
-
-    llm_res = gateway.generate_json(
-        system_prompt=(
-            "You are HunarLink Demand Bridge's B2B Requirement Parser. "
-            "Convert a wholesale/corporate craft buyer's natural-language brief into structured JSON. "
-            "Extract ONLY what is stated; leave unmentioned numbers null and note them in `ambiguous_fields`."
-        ),
-        user_prompt=raw_request_text,
-        json_schema=schema,
-        temperature=0.1,
-    )
-
-    structured = dict(baseline)
-    if llm_res.ok and llm_res.parsed_json:
-        p = llm_res.parsed_json
-        if p.get("category_slug"):
-            structured["category_slug"] = p["category_slug"]
-        if isinstance(p.get("craft_technique"), str) and p["craft_technique"].strip():
-            structured["craft_technique"] = p["craft_technique"].strip()[:160]
-        if isinstance(p.get("requested_quantity"), (int, float)) and p["requested_quantity"] > 0:
-            structured["requested_quantity"] = int(p["requested_quantity"])
-        if isinstance(p.get("budget_min_inr"), (int, float)) and p["budget_min_inr"] > 0:
-            structured["budget_min_inr"] = float(p["budget_min_inr"])
-        if isinstance(p.get("budget_max_inr"), (int, float)) and p["budget_max_inr"] > 0:
-            structured["budget_max_inr"] = float(p["budget_max_inr"])
-        if isinstance(p.get("target_delivery_days"), (int, float)) and p["target_delivery_days"] > 0:
-            structured["target_delivery_days"] = int(p["target_delivery_days"])
-        if isinstance(p.get("preferred_district"), str) and p["preferred_district"].strip():
-            structured["preferred_district"] = p["preferred_district"].strip()[:100]
-        if isinstance(p.get("requires_verified_claims"), bool):
-            structured["requires_verified_claims"] = p["requires_verified_claims"]
-        if isinstance(p.get("customization_notes"), str) and p["customization_notes"].strip():
-            structured["customization_notes"] = p["customization_notes"].strip()[:500]
-        if isinstance(p.get("ambiguous_fields"), list) and p["ambiguous_fields"]:
-            structured["ambiguous_fields"] = [
-                str(x).strip() for x in p["ambiguous_fields"] if str(x).strip()
-            ][:6]
-
+def parse_buyer_brief(raw_request_text: str) -> dict[str, Any]:
+    """Deterministically parse a natural-language bulk buyer brief into structured specs."""
+    structured = _deterministic_parse_brief(raw_request_text)
     return {
         "structured_requirements": structured,
-        "ai_meta": {
-            "provider_used": llm_res.provider_used,
-            "model_used": llm_res.model_used,
-            "latency_ms": llm_res.latency_ms,
-        },
+        "parser_mode": "deterministic",
     }
 
 
@@ -629,5 +545,5 @@ def match_demand_to_artisans(
         "matched_count": len(persisted_matches),
         "cluster_plan": cluster_plan,
         "matches": persisted_matches,
-        "matching_method": "100% deterministic MySQL capability & verification scoring (zero LLM hallucination)",
+        "matching_method": "100% deterministic MySQL capability & verification scoring",
     }

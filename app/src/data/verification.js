@@ -24,7 +24,7 @@ export const VERIFICATION_STEPS = {
     heading: 'How We Test Fiber & Material Purity',
     checks: [
       'Microscopic fiber testing confirms authentic Ladakhi Changthangi Pashmina (under 16 microns \u2014 5x finer than human hair).',
-      'AI macro weave inspection verifies hand-spun irregularity, real mulberry silk knot density, and seasoned walnut wood grain.',
+      'Macro weave inspection verifies hand-spun irregularity, real mulberry silk knot density, and seasoned walnut wood grain.',
       'Natural mineral and vegetable dyes are checked to ensure heirloom longevity and skin-safe comfort.'
     ],
     proofTitle: 'Sample Lab Purity Report',

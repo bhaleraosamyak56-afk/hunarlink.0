@@ -1,4 +1,4 @@
-"""FastAPI Router for CraftProof AI Digital Craft Passports, Claims, Evidence & QR Codes."""
+"""FastAPI Router for CraftProof Digital Craft Passports, Claims, Evidence & QR Codes."""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -267,7 +267,7 @@ def admin_list_craft_claims(
     principal: AuthenticatedPrincipal = Depends(get_current_principal),
     db: Session = Depends(get_db),
 ) -> dict:
-    """Admin review queue for CraftProof product claims, evidence hashes & AI advisories."""
+    """Admin review queue for CraftProof product claims and evidence hashes."""
     if not principal.is_active_admin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -309,7 +309,6 @@ def admin_list_craft_claims(
                 "verification_status": cl.verification_status,
                 "verified_by_authority": cl.verified_by_authority,
                 "decision_notes": cl.decision_notes,
-                "ai_advisory": cl.ai_advisory_json,
                 "evidence_count": len(evs),
                 "evidence": [
                     {

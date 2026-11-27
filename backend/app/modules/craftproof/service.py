@@ -1,15 +1,13 @@
-"""CraftProof AI Digital Craft Passport, Claims, Evidence & Verification Service.
+"""CraftProof Digital Craft Passport, Claims, Evidence & Verification Service.
 
 Core Trust Invariant:
   - Sellers can only declare claims (`SELLER_DECLARED`) and submit evidence (`EVIDENCE_SUBMITTED`).
-  - AI advisories NEVER set `HUMAN_VERIFIED` or `THIRD_PARTY_VERIFIED` and always have `is_legal_proof=False`.
   - Only human Admins (or explicitly recorded third-party registry checks) transition claims to verified states.
 """
 from __future__ import annotations
 
 import hashlib
 import re
-from decimal import Decimal
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -23,7 +21,6 @@ from app.models.core_models import (
     ProductImage,
     SellerProductListing,
     SellerProfile,
-    User,
 )
 from app.models.craftproof_models import (
     VERIFIED_CLAIM_STATUSES,
@@ -674,7 +671,6 @@ def serialize_passport_public(
             "verified_by_authority": cl.verified_by_authority,
             "verified_at": cl.verified_at.isoformat() if cl.verified_at else None,
             "decision_notes": cl.decision_notes,
-            "ai_advisory": cl.ai_advisory_json,
             "evidence": evidence_by_claim.get(cl.id, []),
             "updated_at": cl.updated_at.isoformat() if cl.updated_at else None,
         }
@@ -701,8 +697,8 @@ def serialize_passport_public(
         "overall_trust_level": overall_trust,
         "trust_disclosure": (
             "This Digital Craft Passport explicitly separates Seller-Declared statements "
-            "from Human-Verified or Third-Party Verified facts. AI tools assist with pre-screening "
-            "and buyer explanation only and never grant authenticity certification."
+            "from Human-Verified or Third-Party Verified facts. Verification is granted "
+            "strictly by Human Administrators or recorded third-party authorities."
         ),
         "summary_counts": {
             "total_claims": len(serialized_claims),

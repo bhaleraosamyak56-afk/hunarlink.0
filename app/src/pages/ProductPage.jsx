@@ -13,7 +13,6 @@ import '../styles/pdp.css';
 import { IconPackage, IconShield, IconTruck } from '../components/LineIcons.jsx';
 import { describeCraft } from '../data/guilds.js';
 import { fetchPassportByProduct, passportQrSvgUrl } from '../services/craftproofApi.js';
-import BuyerAssistantDrawer from '../components/craftproof/BuyerAssistantDrawer.jsx';
 
 /* ==========================================================================
    ProductPage
@@ -411,13 +410,13 @@ export default function ProductPage() {
           </div>
         </div>
 
-        {/* Pillar 3 — CraftProof Digital Passport + Evidence-Locked Buyer Assistant (Additive) */}
+        {/* CraftProof Digital Passport */}
         {craftPassport && (
           <section style={{ margin: '28px 0 12px' }}>
             <div className="cp-card" style={{ borderColor: 'rgba(20,56,42,0.22)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 16 }}>
                 <div style={{ flex: 1, minWidth: 260 }}>
-                  <div className="cp-kicker">CraftProof AI &middot; Living Digital Craft Passport</div>
+                  <div className="cp-kicker">CraftProof &middot; Living Digital Craft Passport</div>
                   <h2 style={{ margin: '0 0 6px', fontSize: '1.25rem', fontFamily: 'var(--font-serif, Georgia, serif)' }}>
                     Inspect Provenance, Evidence &amp; Fair-Craft Pricing
                   </h2>
@@ -460,11 +459,6 @@ export default function ProductPage() {
                 </Link>
               </div>
             </div>
-
-            <BuyerAssistantDrawer
-              passportCode={craftPassport.passport_code}
-              productName={product.title}
-            />
           </section>
         )}
 

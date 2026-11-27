@@ -1,4 +1,4 @@
-"""FastAPI Router for Demand Bridge (Wholesale AI Parsing + Deterministic Cluster Matching)."""
+"""FastAPI Router for Demand Bridge (Deterministic Wholesale Brief Parsing & Cluster Matching)."""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -54,10 +54,9 @@ def _optional_principal(
 @router.post("/demand-bridge/parse")
 def post_parse_demand_brief(
     payload: DemandParseIn,
-    settings: Settings = Depends(get_settings),
 ) -> dict:
-    """Step 1: Parse messy natural-language wholesale brief into structured JSON for buyer confirmation."""
-    return parse_buyer_brief(settings, payload.raw_request_text)
+    """Step 1: Deterministically parse wholesale brief into structured JSON for buyer confirmation."""
+    return parse_buyer_brief(payload.raw_request_text)
 
 
 @router.post("/demand-bridge/match", status_code=status.HTTP_201_CREATED)

@@ -1,6 +1,6 @@
 /* ==========================================================================
-   craftproof.css — Strictly additive styling for CraftProof AI Passports,
-   Voice Artisan Copilot, Adversarial Claim Auditor & Demand Bridge Clusters.
+   craftproof.css — Strictly additive styling for CraftProof Passports
+   and Demand Bridge Clusters.
    Uses scoped `.cp-*` classes so existing storefront/portal CSS is untouched.
    ========================================================================== */
 
@@ -264,10 +264,6 @@
   height: 10px;
   border-radius: 999px;
   background: #14382a;
-}
-
-.cp-timeline-item--ai::before {
-  background: #d97706;
 }
 
 .cp-timeline-item--verified::before {

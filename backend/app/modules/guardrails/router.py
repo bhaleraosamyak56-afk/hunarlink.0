@@ -16,7 +16,6 @@ from app.core.config import Settings, get_settings
 from app.core.database import get_db
 from app.models.core_models import SupplierLot, SupplierProfile
 from app.modules.guardrails import repository, service
-from app.modules.guardrails.providers.gi_llm_base import BaseGILLMProvider
 from app.modules.guardrails.rules.ownership import assert_owner_or_admin
 from app.modules.guardrails.schemas import (
     AdminCaseDecisionInput,
@@ -33,11 +32,6 @@ from app.modules.guardrails.schemas import (
 )
 
 router = APIRouter(tags=["ASIGS Guardrails"])
-
-
-def get_optional_gi_llm_provider() -> BaseGILLMProvider | None:
-    """Dependency hook allowing tests or future GI integration to inject a provider."""
-    return None
 
 
 def _corr_id(request: Request) -> str:
@@ -256,17 +250,13 @@ def assess_verification(
     payload: VerificationAssessInput,
     request: Request,
     principal: AuthenticatedPrincipal = Depends(get_current_principal),
-    settings: Settings = Depends(get_settings),
-    llm_provider: BaseGILLMProvider | None = Depends(get_optional_gi_llm_provider),
     db: Session = Depends(get_db),
 ) -> GuardrailResponse:
     res = service.run_verification_assessment(
         db,
         principal=principal,
         payload=payload,
-        settings=settings,
         correlation_id=_corr_id(request),
-        llm_provider_override=llm_provider,
     )
     if res.outcome == GuardrailOutcome.BLOCK:
         raise HTTPException(

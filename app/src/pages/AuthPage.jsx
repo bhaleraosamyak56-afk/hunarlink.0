@@ -16,8 +16,6 @@ import {
   uploadGuardrailDocument
 } from '../services/apiClient.js';
 import { IconArrowRight, IconBadgeCheck, IconCheck, IconShield, IconSpark } from '../components/LineIcons.jsx';
-import DocPreScreenCard from '../components/craftproof/DocPreScreenCard.jsx';
-import { prescreenArtisanDocument } from '../services/craftproofApi.js';
 import { hdSrcFor, srcSetFor } from '../data/imageVariants.js';
 import '../styles/portal.css';
 
@@ -328,20 +326,6 @@ export default function AuthPage() {
         },
         token
       );
-
-      // 3b. Additive non-blocking Pillar 1A AI Document Pre-Screen (passes advisory dossier to Admin; never auto-approves)
-      prescreenArtisanDocument(
-        {
-          file_scan_id: uploadedScanId,
-          application_id: submitRes.application_id,
-          store_name: form.storeName.trim(),
-          craft_specialty: form.craft,
-          workshop_district: form.district,
-          verification_path: giMode === 'with_gi' ? 'GI' : 'NON_GI',
-          claimed_gi_code: giMode === 'with_gi' ? form.giId.trim() : null
-        },
-        token
-      ).catch(() => {});
 
       const sp = submitRes.seller_profile;
       const isApprovedNow =
@@ -881,14 +865,6 @@ export default function AuthPage() {
                     </div>
                   </div>
                 )}
-
-                {/* Pillar 1A — Local AI Document Pre-Screen (Advisory Only — Admin Verifies Manually) */}
-                <DocPreScreenCard
-                  clerk={clerk}
-                  cardFile={cardFile}
-                  giMode={giMode}
-                  form={form}
-                />
 
                 <div className="form-field">
                   <label className="up-label" htmlFor="art-bio">

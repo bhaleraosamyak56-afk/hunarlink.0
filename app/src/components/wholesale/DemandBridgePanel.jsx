@@ -37,7 +37,7 @@ export default function DemandBridgePanel({ defaultBuyerName = '', defaultBuyerE
     setDispatchedInfo(null);
     try {
       const res = await parseDemandBrief(rawBrief.trim());
-      setParsed({ ...res.structured_requirements, _aiMeta: res.ai_meta });
+      setParsed(res.structured_requirements);
     } catch (err) {
       setError(err?.message || 'Could not parse buyer brief.');
     } finally {
@@ -54,7 +54,7 @@ export default function DemandBridgePanel({ defaultBuyerName = '', defaultBuyerE
       let reqStruct = parsed;
       if (!reqStruct) {
         const pRes = await parseDemandBrief(rawBrief.trim());
-        reqStruct = { ...pRes.structured_requirements, _aiMeta: pRes.ai_meta };
+        reqStruct = pRes.structured_requirements;
         setParsed(reqStruct);
       }
       const res = await matchDemandBridge({
@@ -108,7 +108,7 @@ export default function DemandBridgePanel({ defaultBuyerName = '', defaultBuyerE
           Source Bulk Heritage Crafts Directly &mdash; Auto-Pooling Small Rural Workshops
         </h2>
         <p style={{ margin: 0, fontSize: '0.88rem', opacity: 0.92, maxWidth: 820, lineHeight: 1.55 }}>
-          Describe your corporate, hotel, or boutique order in plain English. Local AI extracts structured specs, and
+          Describe your corporate, hotel, or boutique order in plain English. HunarLink extracts structured specs, and
           our <strong>100% deterministic MySQL matching engine</strong> evaluates all real Kashmiri workshops — automatically
           forming a <strong>Multi-Artisan Fulfillment Cluster</strong> when volume exceeds any single atelier&apos;s capacity.
         </p>
@@ -172,7 +172,7 @@ export default function DemandBridgePanel({ defaultBuyerName = '', defaultBuyerE
             disabled={parseLoading || rawBrief.trim().length < 10}
             onClick={handleParse}
           >
-            {parseLoading ? 'Extracting Brief…' : '1. Structure Brief with Local AI'}
+            {parseLoading ? 'Extracting Brief…' : '1. Extract Structured Brief'}
           </button>
           <button
             type="button"
@@ -193,11 +193,6 @@ export default function DemandBridgePanel({ defaultBuyerName = '', defaultBuyerE
           <div style={{ marginTop: 14, padding: 14, borderRadius: 12, background: '#faf8f3', border: '1px solid rgba(20,56,42,0.14)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
               <strong style={{ fontSize: '0.86rem', color: '#14382a' }}>Structured Requirements (Editable Before Matching)</strong>
-              {parsed._aiMeta && (
-                <span style={{ fontSize: '0.73rem', color: '#6b7280' }}>
-                  Parser: {parsed._aiMeta.provider_used} ({parsed._aiMeta.model_used})
-                </span>
-              )}
             </div>
             <div className="cp-grid-3">
               <label style={{ fontSize: '0.76rem', color: '#4b5563' }}>

@@ -1,1 +1,1 @@
-"""ASIGS Guardrail provider interfaces (GI LLM abstraction & malware scanner)."""
+"""ASIGS Guardrail provider interfaces (malware scanner)."""

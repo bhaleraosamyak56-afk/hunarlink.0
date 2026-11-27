@@ -27,8 +27,6 @@ from app.models.core_models import (
     WarehouseStock,
 )
 from app.models.guardrail_models import GuardrailCase, GuardrailCaseEvent
-from app.modules.guardrails.providers.gi_llm_base import BaseGILLMProvider, GIAssessmentRequest
-from app.modules.guardrails.router import get_optional_gi_llm_provider
 from app.modules.guardrails.rules.inventory import (
     post_goods_receipt_to_dealer_inventory,
     reserve_stock_atomic,
@@ -45,32 +43,6 @@ EICAR_PREFIX_PDF = (
     b"%PDF-1.4\n"
     b"X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*\n%%EOF"
 )
-
-
-class SpyGILLMProvider(BaseGILLMProvider):
-    """Spy provider asserting NON_GI workflows NEVER invoke GI LLM."""
-
-    def __init__(self, raw_return: dict | None = None) -> None:
-        self.calls: int = 0
-        self.raw_return = raw_return
-
-    def assess(self, request: GIAssessmentRequest) -> dict:
-        self.calls += 1
-        if self.raw_return is not None:
-            return self.raw_return
-        return {
-            "provider_name": "spy-gi-provider",
-            "model_version": "spy-1",
-            "prompt_version": "p1",
-            "dataset_version": request.dataset_version,
-            "assessment_outcome": "LIKELY_MATCH",
-            "confidence_score": 0.9,
-            "is_legal_proof": False,
-            "is_mock_provider": True,
-            "prompt_injection_suspected": False,
-            "summary": "Spy match",
-            "signals": [],
-        }
 
 
 # 1. Unauthenticated seller submission rejected
@@ -305,12 +277,10 @@ def test_11_private_document_authorization_enforced(app_and_client, db_session):
     assert client.get(f"/api/v1/guardrails/documents/{scan_id}").status_code == 200
 
 
-# 12. Non-GI verification NEVER invokes GI LLM provider
-def test_12_non_gi_verification_never_calls_gi_llm(app_and_client, db_session):
+# 12. Non-GI verification uses manual Admin review only
+def test_12_non_gi_verification_uses_manual_review_only(app_and_client, db_session):
     app, client = app_and_client
     entities = seed_marketplace_entities(db_session)
-    spy = SpyGILLMProvider()
-    app.dependency_overrides[get_optional_gi_llm_provider] = lambda: spy
 
     non_gi_app = SellerVerificationApplication(
         id=new_uuid(),
@@ -328,7 +298,6 @@ def test_12_non_gi_verification_never_calls_gi_llm(app_and_client, db_session):
         json={"application_id": non_gi_app.id, "evidence_scan_ids": ["scan-1"]},
     )
     assert resp.status_code == 200
-    assert spy.calls == 0  # HARD INVARIANT: Non-GI NEVER touches GI LLM!
     assert resp.json()["outcome"] == "REVIEW_REQUIRED"
     assert "GI_NON_GI_MANUAL_ONLY" in resp.json()["triggered_rule_codes"]
 
@@ -361,8 +330,8 @@ def test_13_gi_claim_without_evidence_escalates_to_review(app_and_client, db_ses
     assert body["review_case_id"] is not None
 
 
-# 14. Prompt injection inside untrusted seller GI claim fails safe to REVIEW_REQUIRED
-def test_14_prompt_injection_in_gi_claim_isolated_and_escalated(app_and_client, db_session):
+# 14. GI claim with matching GI reference and arbitrary untrusted text still requires human review
+def test_14_gi_claim_with_evidence_routes_to_mandatory_human_review(app_and_client, db_session):
     app, client = app_and_client
     entities = seed_marketplace_entities(db_session)
 
@@ -389,36 +358,22 @@ def test_14_prompt_injection_in_gi_claim_isolated_and_escalated(app_and_client, 
     assert resp.status_code == 200
     body = resp.json()
     assert body["outcome"] == "REVIEW_REQUIRED"
-    assert "GI_PROMPT_INJECTION_FLAGGED" in body["triggered_rule_codes"]
-    # Business status was NEVER auto-approved!
+    assert "GI_REFERENCE_MATCH_PENDING_HUMAN_DECISION" in body["triggered_rule_codes"]
+    # Business status is NEVER auto-approved!
     assert body["business_status"] == "SUBMITTED"
 
 
-# 15. Malformed / unauthorized GI LLM output (e.g. claiming is_legal_proof=True) rejected!
-def test_15_invalid_gi_llm_output_rejected(app_and_client, db_session):
+# 15. Unknown GI code or geographic area conflict routes to human Admin review
+def test_15_unknown_gi_code_or_area_conflict_requires_human_review(app_and_client, db_session):
     app, client = app_and_client
     entities = seed_marketplace_entities(db_session)
-    rogue_provider = SpyGILLMProvider(
-        raw_return={
-            "provider_name": "rogue-llm",
-            "model_version": "bad-1",
-            "prompt_version": "p1",
-            "dataset_version": "d1",
-            "assessment_outcome": "LIKELY_MATCH",
-            "confidence_score": 0.99,
-            "is_legal_proof": True,  # ILLEGAL! Must be False!
-            "is_mock_provider": False,
-            "summary": "Attempting illegal auto-proof",
-        }
-    )
-    app.dependency_overrides[get_optional_gi_llm_provider] = lambda: rogue_provider
 
     gi_app = SellerVerificationApplication(
         id=new_uuid(),
         seller_profile_id=entities["seller_profile"].id,
         application_number="APP-GI-BAD-001",
         verification_path="GI",
-        claimed_gi_code="GI-46-KASHMIR-PASHMINA",
+        claimed_gi_code="GI-UNKNOWN-9999",
         application_status="SUBMITTED",
     )
     db_session.add(gi_app)
@@ -429,8 +384,11 @@ def test_15_invalid_gi_llm_output_rejected(app_and_client, db_session):
         "/api/v1/guardrails/verification/assess",
         json={"application_id": gi_app.id, "evidence_scan_ids": ["scan-1"]},
     )
-    assert resp.status_code == 422
-    assert "GI_INVALID_LLM_OUTPUT_REJECTED" in resp.json()["detail"]["triggered_rule_codes"]
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["outcome"] == "REVIEW_REQUIRED"
+    assert "GI_REFERENCE_NOT_FOUND_MANUAL_REVIEW" in body["triggered_rule_codes"]
+    assert body["business_status"] == "SUBMITTED"
 
 
 # 16. Invalid wholesale commercial tiers (overlap, below MOQ, non-monotonic price, bad currency) blocked

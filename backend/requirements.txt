@@ -16,6 +16,5 @@ httpx==0.28.1
 pytest==8.4.2
 sqlglot==26.33.0
 
-# CraftProof AI (pure-Python QR generation & PDF text extraction)
+# CraftProof (pure-Python QR generation)
 segno==1.6.1
-pypdf==5.4.0

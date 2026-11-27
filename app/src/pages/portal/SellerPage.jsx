@@ -14,7 +14,6 @@ import {
 import { formatINR, asset } from '../../utils/legacy.js';
 import { appHref } from '../../utils/href.js';
 import { IconGrid, IconPlus, IconPalette, IconPackage, IconChat, IconHeart, IconX } from '../../components/LineIcons.jsx';
-import ArtisanCopilotPanel from '../../components/seller/ArtisanCopilotPanel.jsx';
 import ListingPassportModal from '../../components/seller/ListingPassportModal.jsx';
 import ClusterOffersPanel from '../../components/seller/ClusterOffersPanel.jsx';
 
@@ -1113,44 +1112,6 @@ export default function SellerPage() {
                   </div>
                   <span className="status-chip live">● Instant Live Sync</span>
                 </div>
-
-                {/* Pillar 2 & 1B — Vernacular Voice Artisan Copilot + Adversarial Audit (Additive) */}
-                <ArtisanCopilotPanel
-                  clerk={clerk}
-                  currentForm={{
-                    title: newForm.title,
-                    price: newForm.price,
-                    stock: newForm.stock,
-                    desc: newForm.description,
-                    technique: newForm.technique,
-                    origin: seller?.district
-                  }}
-                  sellerDistrict={seller?.district}
-                  sellerCraft={seller?.craft}
-                  sellerVerificationPath={seller?.verificationPath}
-                  onApplyDraft={(draft) => {
-                    const guildMap = {
-                      pashmina: 'pashmina',
-                      'kani-shawls': 'pashmina',
-                      'walnut-wood': 'walnut',
-                      'papier-mache': 'papier-mache',
-                      'kashmiri-carpets': 'silk-rugs'
-                    };
-                    const nextGuild = guildMap[draft.guild_slug] || newForm.guild;
-                    setNewForm((prev) => ({
-                      ...prev,
-                      title: draft.title || prev.title,
-                      guild: nextGuild,
-                      price: draft.selling_price_inr ? String(draft.selling_price_inr) : prev.price,
-                      mrp: draft.selling_price_inr
-                        ? String(Math.round(Number(draft.selling_price_inr) * 1.25))
-                        : prev.mrp,
-                      stock: draft.stock_quantity ? String(draft.stock_quantity) : prev.stock,
-                      description: draft.clean_description || prev.description
-                    }));
-                    toast('Copilot draft applied to listing form! Review and edit freely before publishing.', 'success');
-                  }}
-                />
 
                 <form id="new-product-form" onSubmit={submitPublish}>
                   <div className="form-grid-2">

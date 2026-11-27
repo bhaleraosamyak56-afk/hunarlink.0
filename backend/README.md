@@ -103,7 +103,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 | Supplier Guardrails | `POST /api/v1/supplier/lots/validate`, `POST /api/v1/supplier/lots`, `GET /api/v1/supplier/lots/{lot_id}` | Clerk JWT + `SUPPLIER` (owner or admin) |
 | Dealer Guardrails | `POST /api/v1/dealer/profile/validate`, `POST /api/v1/dealer/wholesale-listings/validate`, `POST /api/v1/dealer/assignments/{id}/respond` | Clerk JWT + `DEALER` |
 | Document Security | `POST /api/v1/guardrails/documents/upload`, `GET /api/v1/guardrails/documents/{scan_id}` | Clerk JWT (owner or authorized Admin) |
-| GI Verification Gate | `POST /api/v1/guardrails/verification/assess` | Clerk JWT (owner or reviewer; Non-GI never invokes GI LLM) |
+| GI Verification Gate | `POST /api/v1/guardrails/verification/assess` | Clerk JWT (owner or reviewer; deterministic GI vs Non-GI human review routing) |
 | Admin Guardrails | `GET /api/v1/admin/guardrail/cases`, `GET /api/v1/admin/guardrail/cases/{id}`, `POST /api/v1/admin/guardrail/cases/{id}/decision`, `GET /api/v1/admin/guardrail/rules` | Clerk JWT + Admin RBAC (`guardrails.read` / `guardrails.decide`) |
 | Razorpay Checkout | `POST /api/v1/payments/razorpay/create-order`, `POST /api/v1/payments/razorpay/verify` | Clerk JWT (order owner) |
 | Payment Status | `GET /api/v1/payments/{payment_id}`, `GET /api/v1/orders/{order_scope}/{order_id}/payment-status` | Clerk JWT (payer or Admin) |

@@ -1,21 +1,15 @@
-"""Automated tests for CraftProof AI Passports, Local AI Guardrails & Demand Bridge Cluster Pooling.
+"""Automated tests for CraftProof Passports & Deterministic Demand Bridge Cluster Pooling.
 
-Tests run cleanly in deterministic fallback mode (zero external API calls required)
-and enforce all hard trust invariants alongside the 73 existing marketplace tests.
+Tests run cleanly in pure deterministic mode (zero LLM or external API calls)
+and enforce all hard trust invariants.
 """
 from __future__ import annotations
 
 from decimal import Decimal
 
-import pytest
-from sqlalchemy.exc import IntegrityError
-
 from app.models.base import new_uuid
 from app.models.core_models import SellerProfile
-from app.models.craftproof_models import (
-    ArtisanCapability,
-    CraftVerificationEvent,
-)
+from app.models.craftproof_models import ArtisanCapability
 from tests.conftest import (
     create_user_with_roles,
     seed_marketplace_entities,
@@ -23,8 +17,16 @@ from tests.conftest import (
 )
 
 
-def test_craft_passport_lifecycle_qr_and_human_only_verification(app_and_client, db_session, test_settings):
-    test_settings.ai_provider = "fallback"
+def test_ai_routes_completely_removed(app_and_client):
+    _, client = app_and_client
+    assert client.get("/api/v1/ai/status").status_code == 404
+    assert client.post("/api/v1/ai/artisan-doc/prescreen", json={}).status_code == 404
+    assert client.post("/api/v1/ai/artisan-copilot/draft", json={}).status_code == 404
+    assert client.post("/api/v1/ai/craft-audit/listing", json={}).status_code == 404
+    assert client.post("/api/v1/ai/buyer-assistant/ask", json={}).status_code == 404
+
+
+def test_craft_passport_lifecycle_qr_and_human_only_verification(app_and_client, db_session):
     app, client = app_and_client
     env = seed_marketplace_entities(db_session)
     listing = env["active_listing"]
@@ -61,21 +63,7 @@ def test_craft_passport_lifecycle_qr_and_human_only_verification(app_and_client,
     assert lookup_res.status_code == 200
     assert lookup_res.json()["count"] >= 1
 
-    # 4. Buyer Assistant refuses to confirm authenticity while 0 claims are verified
-    ask_before = client.post(
-        "/api/v1/ai/buyer-assistant/ask",
-        json={
-            "passport_code": passport_code,
-            "question": "Is this 100% authentic lab-verified GI Pashmina?",
-        },
-    )
-    assert ask_before.status_code == 200, ask_before.text
-    b_data = ask_before.json()
-    assert b_data["verified_claims_count"] == 0
-    assert b_data["is_legal_proof"] is False
-    assert "ZERO independently verified" in b_data["answer"] or "SELLER_DECLARED" in b_data["answer"]
-
-    # 5. Seller attaches evidence to Material claim -> status becomes EVIDENCE_SUBMITTED
+    # 4. Seller attaches evidence to Material claim -> status becomes EVIDENCE_SUBMITTED
     claim_id = passport["unverified_claims"][0]["claim_id"]
     set_authenticated_principal(app, env["seller_principal"])
     ev_res = client.post(
@@ -89,7 +77,7 @@ def test_craft_passport_lifecycle_qr_and_human_only_verification(app_and_client,
     assert ev_res.status_code == 201, ev_res.text
     assert ev_res.json()["verification_status"] == "EVIDENCE_SUBMITTED"
 
-    # 6. Seller MUST be blocked (403) from verifying their own claim!
+    # 5. Seller MUST be blocked (403) from verifying their own claim!
     forbid_res = client.post(
         f"/api/v1/admin/passports/claims/{claim_id}/decision",
         json={
@@ -99,7 +87,7 @@ def test_craft_passport_lifecycle_qr_and_human_only_verification(app_and_client,
     )
     assert forbid_res.status_code == 403
 
-    # 7. Human Admin verifies the claim -> passport upgrades live & timeline records HUMAN_ADMIN
+    # 6. Human Admin verifies the claim -> passport upgrades live & timeline records HUMAN_ADMIN
     set_authenticated_principal(app, env["admin_principal"])
     admin_q = client.get("/api/v1/admin/passports/claims?status_filter=EVIDENCE_SUBMITTED")
     assert admin_q.status_code == 200
@@ -119,127 +107,8 @@ def test_craft_passport_lifecycle_qr_and_human_only_verification(app_and_client,
     assert decided["overall_trust_level"] == "HUMAN_VERIFIED"
     assert len(decided["passport"]["verified_claims"]) == 1
 
-    # 8. Buyer Assistant now cites the live verified claim while keeping other claims unverified
-    set_authenticated_principal(app, None)
-    ask_after = client.post(
-        "/api/v1/ai/buyer-assistant/ask",
-        json={
-            "passport_code": passport_code,
-            "question": "Is this authentic and verified?",
-        },
-    )
-    assert ask_after.status_code == 200
-    assert ask_after.json()["verified_claims_count"] == 1
-    assert "HUMAN_VERIFIED" in ask_after.json()["answer"]
 
-
-def test_db_check_constraint_blocks_ai_advisory_from_marking_verified(db_session):
-    """Hard SQL CHECK constraint guarantees AI_ADVISORY can never log a verified decision."""
-    env = seed_marketplace_entities(db_session)
-    from app.modules.craftproof.service import ensure_passport_for_listing
-
-    cp = ensure_passport_for_listing(db_session, listing=env["active_listing"])
-    db_session.commit()
-
-    bad_event = CraftVerificationEvent(
-        passport_id=cp.id,
-        claim_id=None,
-        event_type="AI_ADVISORY_RUN",
-        from_status="SELLER_DECLARED",
-        to_status="HUMAN_VERIFIED",
-        actor_type="AI_ADVISORY",
-        actor_user_id=None,
-        summary="Illegal AI verification attempt",
-        is_legal_proof=False,
-    )
-    db_session.add(bad_event)
-    with pytest.raises(IntegrityError):
-        db_session.commit()
-    db_session.rollback()
-
-
-def test_pillar1a_artisan_doc_prescreen_flags_contradictions(app_and_client, db_session, test_settings):
-    test_settings.ai_provider = "fallback"
-    app, client = app_and_client
-    env = seed_marketplace_entities(db_session)
-    set_authenticated_principal(app, env["seller_principal"])
-
-    res = client.post(
-        "/api/v1/ai/artisan-doc/prescreen",
-        json={
-            "store_name": "Valley Looms",
-            "craft_specialty": "Kashmir Pashmina",
-            "workshop_district": "Srinagar",
-            "verification_path": "GI",
-            "claimed_gi_code": "GI-JK-PASH-9999",
-            "document_text_snippet": "Artisan Card issued in Anantnag for Walnut Wood Carving reg AU-1042.",
-        },
-    )
-    assert res.status_code == 200, res.text
-    data = res.json()
-    assert data["is_legal_proof"] is False
-    assert data["human_verification_required"] is True
-    assert data["advisory_status"] == "MISMATCH_DETECTED"
-    assert len(data["contradictions"]) >= 2
-
-
-def test_pillar1b_adversarial_craft_audit_catches_fake_kani_economics(app_and_client, db_session, test_settings):
-    test_settings.ai_provider = "fallback"
-    app, client = app_and_client
-    env = seed_marketplace_entities(db_session)
-    set_authenticated_principal(app, env["seller_principal"])
-
-    res = client.post(
-        "/api/v1/ai/craft-audit/listing",
-        json={
-            "title": "100% Pure GI Certified Handwoven Kani Pashmina Shawl",
-            "description": "Guaranteed genuine Kani shawl, 90 days handwork",
-            "craft_technique": "Kani Handloom",
-            "material_composition": "Pure Pashmina",
-            "origin_district": "Srinagar",
-            "selling_price_inr": 1550,
-            "stock_quantity": 250,
-            "craft_days_claimed": 90,
-            "seller_verification_path": "NON_GI",
-            "seller_workshop_district": "Jammu",
-        },
-    )
-    assert res.status_code == 200, res.text
-    audit = res.json()
-    assert audit["risk_level"] == "HIGH"
-    assert audit["is_legal_proof"] is False
-    codes = {f["code"] for f in audit["red_flags"]}
-    assert "IMPLAUSIBLE_HANDMADE_PRICE" in codes
-    assert "FACTORY_VOLUME_STOCK_ANOMALY" in codes
-    assert "GI_CLAIM_BY_NON_GI_PROFILE" in codes
-
-
-def test_pillar2_hinglish_artisan_copilot_zero_hallucination(app_and_client, test_settings):
-    test_settings.ai_provider = "fallback"
-    _, client = app_and_client
-
-    res = client.post(
-        "/api/v1/ai/artisan-copilot/draft",
-        json={
-            "raw_note": "Main Budgam se hoon, haath se Sozni shawl banaya hai, 45 din lage, pure wool hai, 14500 rupaye chahiye, 3 piece ready hain.",
-        },
-    )
-    assert res.status_code == 200, res.text
-    out = res.json()
-    draft = out["draft"]
-    assert draft["origin_district"] == "Budgam"
-    assert draft["craft_days_estimated"] == 45
-    assert draft["selling_price_inr"] == 14500
-    assert draft["stock_quantity"] == 3
-    # GI code was NOT mentioned -> MUST stay null & flagged in missing fields!
-    assert draft["claimed_gi_code"] is None
-    assert any("GI" in m for m in out["missing_fields_to_confirm"])
-    assert all(c["status"] == "SELLER_DECLARED" for c in out["extracted_claims"])
-    assert out["fair_craft_breakdown"]["estimated_craft_days"] == 45
-
-
-def test_pillar4_demand_bridge_multi_artisan_cluster_pooling(app_and_client, db_session, test_settings):
-    test_settings.ai_provider = "fallback"
+def test_demand_bridge_multi_artisan_cluster_pooling(app_and_client, db_session):
     app, client = app_and_client
     seed_marketplace_entities(db_session)
 
@@ -290,7 +159,7 @@ def test_pillar4_demand_bridge_multi_artisan_cluster_pooling(app_and_client, db_
         walnut_sellers.append((u, p, sp))
     db_session.commit()
 
-    # Step 1: Parse natural-language bulk brief
+    # Step 1: Deterministically parse natural-language bulk brief
     parse_res = client.post(
         "/api/v1/demand-bridge/parse",
         json={
@@ -298,6 +167,7 @@ def test_pillar4_demand_bridge_multi_artisan_cluster_pooling(app_and_client, db_
         },
     )
     assert parse_res.status_code == 200, parse_res.text
+    assert parse_res.json()["parser_mode"] == "deterministic"
     parsed = parse_res.json()["structured_requirements"]
     assert parsed["category_slug"] == "walnut-wood"
     assert parsed["requested_quantity"] == 85

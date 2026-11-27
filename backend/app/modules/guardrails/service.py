@@ -27,8 +27,6 @@ from app.models.core_models import (
 )
 from app.models.guardrail_models import FileSecurityScan, GuardrailCase
 from app.modules.guardrails import repository
-from app.modules.guardrails.providers.gi_llm_base import BaseGILLMProvider
-from app.modules.guardrails.providers.gi_llm_mock import MockGIWorkflowProvider
 from app.modules.guardrails.providers.malware_scanner import MalwareScanner
 from app.modules.guardrails.rules.commercial import (
     validate_currency,
@@ -652,9 +650,7 @@ def run_verification_assessment(
     *,
     principal: AuthenticatedPrincipal,
     payload: VerificationAssessInput,
-    settings: Settings,
     correlation_id: str,
-    llm_provider_override: BaseGILLMProvider | None = None,
 ) -> GuardrailResponse:
     app_row = db.scalar(
         select(SellerVerificationApplication).where(
@@ -675,17 +671,10 @@ def run_verification_assessment(
         resource_label="verification application",
     )
 
-    provider: BaseGILLMProvider | None = llm_provider_override
-    if provider is None and settings.gi_llm_provider.lower() == "mock":
-        provider = MockGIWorkflowProvider()
-
-    outcome, issues, run = evaluate_verification_application(
+    outcome, issues = evaluate_verification_application(
         db,
         application=app_row,
         evidence_scan_ids=payload.evidence_scan_ids,
-        untrusted_claim_text=payload.untrusted_claim_text,
-        llm_provider=provider,
-        dataset_version=settings.gi_reference_dataset_version,
     )
 
     check = repository.persist_guardrail_check(
@@ -707,7 +696,7 @@ def run_verification_assessment(
             check=check,
             submitted_by_user_id=seller.user_id,
             reason_codes=sorted({i.rule_code for i in issues}),
-            evidence_refs=[{"application_id": app_row.id, "gi_run_id": run.id if run else None}],
+            evidence_refs=[{"application_id": app_row.id}],
             correlation_id=correlation_id,
         )
         review_case_id = case.id
@@ -718,7 +707,7 @@ def run_verification_assessment(
         issues=issues,
         correlation_id=correlation_id,
         review_case_id=review_case_id,
-        created_resource_id=run.id if run else None,
+        created_resource_id=None,
         business_status=app_row.application_status,
     )
 

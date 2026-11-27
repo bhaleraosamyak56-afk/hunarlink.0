@@ -84,7 +84,7 @@ export default function ListingPassportModal({ listing, clerk, onClose, toast })
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginBottom: 12 }}>
           <div>
-            <div className="cp-kicker">CraftProof AI &middot; Manage Passport &amp; Evidence</div>
+            <div className="cp-kicker">CraftProof &middot; Manage Passport &amp; Evidence</div>
             <h3 style={{ margin: 0, fontFamily: 'var(--font-serif, Georgia, serif)' }}>{listing?.title}</h3>
           </div>
           <button type="button" className="cp-btn cp-btn-outline cp-btn-sm" onClick={onClose}>

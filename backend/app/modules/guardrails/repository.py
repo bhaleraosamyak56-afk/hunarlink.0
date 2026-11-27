@@ -124,7 +124,7 @@ DEFAULT_ASIGS_RULES: list[tuple[str, str, str, str]] = [
     ("COMM_EXTREME_DISCOUNT_ANOMALY", "COMMERCIAL", "Escalate suspicious extreme discounts (>85%) for admin review", "REVIEW_REQUIRED"),
     ("DOC_MIME_SIGNATURE_MISMATCH", "DOCUMENT", "Block spoofed file extensions vs binary magic bytes", "BLOCK"),
     ("DUP_REPEATED_SUBMISSION", "DUPLICATE_DETECTION", "Escalate repeated/duplicate listings & document hashes", "REVIEW_REQUIRED"),
-    ("GI_AI_NOT_LEGAL_PROOF", "GI_VERIFICATION", "Keep AI/OCR GI assessments advisory-only; require admin decision", "REVIEW_REQUIRED"),
+    ("GI_HUMAN_APPROVAL_REQUIRED", "GI_VERIFICATION", "Require mandatory human Admin approval for all GI verification claims", "REVIEW_REQUIRED"),
 ]
 
 
