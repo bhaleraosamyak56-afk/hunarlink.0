@@ -93,6 +93,8 @@ export default function AdminPage() {
   const [cardPreviewModal, setCardPreviewModal] = useState(null);
   const [busyAppId, setBusyAppId] = useState(null);
   const [deleteConfirmUser, setDeleteConfirmUser] = useState(null);
+  const [deleteConfirmReason, setDeleteConfirmReason] = useState('');
+  const [deleteConfirmError, setDeleteConfirmError] = useState('');
   const [busyDeleteUserId, setBusyDeleteUserId] = useState(null);
   const [data, setData] = useState({
     overview: null,
@@ -256,11 +258,16 @@ export default function AdminPage() {
 
   async function handleConfirmDeleteUser() {
     if (!deleteConfirmUser) return;
+    setDeleteConfirmError('');
     setBusyDeleteUserId(deleteConfirmUser.user_id);
     try {
       const res = await deleteAdminUser(
         deleteConfirmUser.user_id,
-        { reason: `Removed from Admin Console by ${authState.email || 'admin'}` },
+        {
+          reason:
+            deleteConfirmReason.trim() ||
+            `Removed from Admin Console by ${authState.email || 'admin'}`
+        },
         adminToken
       );
       toast(
@@ -269,9 +276,13 @@ export default function AdminPage() {
         'success'
       );
       setDeleteConfirmUser(null);
+      setDeleteConfirmReason('');
+      setDeleteConfirmError('');
       await loadLiveAdminData(adminToken);
     } catch (err) {
-      toast(err?.message || 'Could not delete user.', 'error');
+      const msg = err?.message || 'Could not delete user.';
+      setDeleteConfirmError(msg);
+      toast(msg, 'error');
     } finally {
       setBusyDeleteUserId(null);
     }
@@ -534,8 +545,15 @@ export default function AdminPage() {
                     <code>user_login_logs</code> with strict role isolation.
                   </p>
                 </div>
-                <div style={{ fontSize: '0.82rem', fontWeight: 600, opacity: 0.85 }}>
-                  Total Logged-In Accounts: {ov.counts?.logged_in_users ?? 0} / {ov.counts?.users ?? 0}
+                <div style={{ fontSize: '0.82rem', fontWeight: 600, opacity: 0.85, textAlign: 'right' }}>
+                  <div>
+                    Total Logged-In Accounts: {ov.counts?.logged_in_users ?? 0} / {ov.counts?.users ?? 0}
+                  </div>
+                  {(ov.counts?.deactivated_users ?? 0) > 0 && (
+                    <div style={{ fontSize: '0.74rem', opacity: 0.72, fontWeight: 500 }}>
+                      Deleted / Anonymized Records Preserved for Orders &amp; Audit: {ov.counts.deactivated_users}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -707,7 +725,11 @@ export default function AdminPage() {
                                   color: '#b33818'
                                 }}
                                 disabled={busyDeleteUserId === u.user_id}
-                                onClick={() => setDeleteConfirmUser(u)}
+                                onClick={() => {
+                                  setDeleteConfirmReason('');
+                                  setDeleteConfirmError('');
+                                  setDeleteConfirmUser(u);
+                                }}
                               >
                                 Delete (DB + Clerk)
                               </button>
@@ -1332,7 +1354,12 @@ export default function AdminPage() {
             justifyContent: 'center',
             padding: '1.25rem'
           }}
-          onClick={() => !busyDeleteUserId && setDeleteConfirmUser(null)}
+          onClick={() => {
+            if (!busyDeleteUserId) {
+              setDeleteConfirmUser(null);
+              setDeleteConfirmError('');
+            }
+          }}
         >
           <div
             className="fk-panel-card"
@@ -1347,21 +1374,59 @@ export default function AdminPage() {
             <h3 style={{ marginTop: 0, color: '#9f2a0f' }}>
               Delete User from DB &amp; Clerk?
             </h3>
-            <p style={{ fontSize: '0.88rem', lineHeight: 1.5, marginBottom: '0.9rem' }}>
+            <p style={{ fontSize: '0.88rem', lineHeight: 1.5, marginBottom: '0.75rem' }}>
               You are about to remove <strong>{deleteConfirmUser.name}</strong> (
               <code>{deleteConfirmUser.email}</code>, role <code>{deleteConfirmUser.role_code}</code>).
             </p>
-            <p style={{ fontSize: '0.82rem', opacity: 0.78, marginBottom: '1.1rem' }}>
-              This safely cleans/anonymizes their MySQL records without breaking order or audit
-              integrity, frees their email for future registration, and{' '}
+            <p style={{ fontSize: '0.82rem', opacity: 0.78, marginBottom: '0.9rem' }}>
+              This checks for active orders first, safely anonymizes/cleans MySQL records without
+              breaking order or audit integrity, frees their email for future registration, and{' '}
               <strong>automatically deletes their account from Clerk</strong>.
             </p>
+            <div style={{ marginBottom: '0.95rem' }}>
+              <label
+                htmlFor="admin-delete-reason"
+                style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, marginBottom: '0.3rem' }}
+              >
+                Audit Reason (optional)
+              </label>
+              <input
+                id="admin-delete-reason"
+                type="text"
+                className="up-input"
+                maxLength={300}
+                placeholder="e.g. Test account cleanup or user support request"
+                value={deleteConfirmReason}
+                disabled={Boolean(busyDeleteUserId)}
+                onChange={(e) => setDeleteConfirmReason(e.target.value)}
+              />
+            </div>
+            {deleteConfirmError && (
+              <div
+                role="alert"
+                style={{
+                  marginBottom: '0.95rem',
+                  padding: '0.65rem 0.8rem',
+                  borderRadius: '8px',
+                  background: '#fdf0ed',
+                  border: '1px solid rgba(179, 56, 24, 0.35)',
+                  color: '#9f2a0f',
+                  fontSize: '0.82rem',
+                  fontWeight: 600
+                }}
+              >
+                {deleteConfirmError}
+              </div>
+            )}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem' }}>
               <button
                 type="button"
                 className="btn-orange-outline"
                 disabled={Boolean(busyDeleteUserId)}
-                onClick={() => setDeleteConfirmUser(null)}
+                onClick={() => {
+                  setDeleteConfirmUser(null);
+                  setDeleteConfirmError('');
+                }}
               >
                 Cancel
               </button>
