@@ -650,7 +650,7 @@ export default function ProfilePage() {
                       reason: deleteReason
                     });
                     toast('Your HunarLink account has been permanently deleted.');
-                    navigate('/login?mode=register&account_deleted=1', { replace: true });
+                    navigate('/register?account_deleted=1', { replace: true });
                   } catch (err) {
                     setDeleteError(err?.message || 'Could not delete your account. Please try again.');
                   } finally {

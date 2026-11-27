@@ -572,7 +572,7 @@ export default function AuthPage() {
                     </div>
                     <p className="login-footer-note" style={{ marginTop: '0.85rem' }}>
                       Prefer email code? Use{' '}
-                      <Link to={`/login?role=artisan&mode=${authMode}`}>
+                      <Link to={authMode === 'register' ? '/register?role=artisan' : '/login?role=artisan'}>
                         Artisan Email {authMode === 'register' ? 'Registration' : 'Sign In'}
                       </Link>
                       .

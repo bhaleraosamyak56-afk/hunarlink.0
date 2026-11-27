@@ -35,6 +35,8 @@ const TITLES = {
   '/seller.html': 'Artisan Portal',
   '/login': 'User Sign In',
   '/login.html': 'User Sign In',
+  '/register': 'Create HunarLink Account',
+  '/register.html': 'Create HunarLink Account',
   '/orders': 'My Orders',
   '/orders.html': 'My Orders',
   '/profile': 'My Profile',

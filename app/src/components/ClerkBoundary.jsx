@@ -165,11 +165,13 @@ function SsoCallbackRunner() {
     const registerDest =
       pendingRole === 'artisan'
         ? '/auth?mode=register&not_registered=1'
-        : '/login?mode=register&not_registered=1';
+        : '/register?not_registered=1';
     const fallbackAuthDest =
       pendingRole === 'artisan'
         ? `/auth?mode=${isSignInAttempt ? 'signin' : 'register'}`
-        : `/login?mode=${isSignInAttempt ? 'signin' : 'register'}`;
+        : isSignInAttempt
+          ? '/login'
+          : '/register';
 
     const safetyTimer = window.setTimeout(() => {
       if (doneRef.current) return;
@@ -198,11 +200,13 @@ function SsoCallbackRunner() {
     const registerDest =
       pendingRole === 'artisan'
         ? '/auth?mode=register&not_registered=1'
-        : '/login?mode=register&not_registered=1';
+        : '/register?not_registered=1';
     const fallbackAuthDest =
       pendingRole === 'artisan'
         ? `/auth?mode=${isSignInAttempt ? 'signin' : 'register'}`
-        : `/login?mode=${isSignInAttempt ? 'signin' : 'register'}`;
+        : isSignInAttempt
+          ? '/login'
+          : '/register';
 
     const go = (target) => {
       if (doneRef.current) return;
@@ -404,6 +408,7 @@ function ClerkBridgeInner({ children }) {
           currentPath === '/' ||
           currentPath === '/index.html' ||
           currentPath === '/login' ||
+          currentPath === '/register' ||
           currentPath === '/sso-callback';
         const isSellerPath = currentPath === '/seller';
 
@@ -412,10 +417,10 @@ function ClerkBridgeInner({ children }) {
             navigate('/auth?tab=verify', { replace: true });
           }
         } else if (dbIsArtisan && dbArtisanVerified) {
-          if (currentPath === '/login' || currentPath === '/sso-callback') {
+          if (currentPath === '/login' || currentPath === '/register' || currentPath === '/sso-callback') {
             navigate('/seller', { replace: true });
           }
-        } else if (!dbIsArtisan && (currentPath === '/login' || currentPath === '/sso-callback')) {
+        } else if (!dbIsArtisan && (currentPath === '/login' || currentPath === '/register' || currentPath === '/sso-callback')) {
           navigate('/', { replace: true });
         }
         if (import.meta.env.DEV) {
@@ -475,7 +480,7 @@ function ClerkBridgeInner({ children }) {
           const registerDest =
             requestedRole === 'artisan'
               ? '/auth?mode=register&not_registered=1'
-              : '/login?mode=register&not_registered=1';
+              : '/register?not_registered=1';
           navigate(registerDest, { replace: true });
           return null;
         }
@@ -583,6 +588,7 @@ function ClerkBridgeInner({ children }) {
         currentPath === '/' ||
         currentPath === '/index.html' ||
         currentPath === '/login' ||
+        currentPath === '/register' ||
         currentPath === '/sso-callback' ||
         currentPath === '/seller'
       ) {
@@ -1221,7 +1227,7 @@ function toRouterPath(to) {
         if (pendingMode !== 'signup') {
           return pendingRole === 'artisan'
             ? '/auth?mode=register&not_registered=1'
-            : '/login?mode=register&not_registered=1';
+            : '/register?not_registered=1';
         }
         return pendingRole === 'artisan' ? '/auth?tab=verify' : '/login';
       }
@@ -1262,7 +1268,7 @@ export default function ClerkBoundary({ children }) {
     <ClerkProvider
       publishableKey={CLERK_PUBLISHABLE_KEY}
       signInUrl={`${cleanBase}/login`}
-      signUpUrl={`${cleanBase}/login?mode=register`}
+      signUpUrl={`${cleanBase}/register`}
       taskUrls={{
         'choose-organization': `${cleanBase}/login`
       }}

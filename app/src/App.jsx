@@ -101,7 +101,7 @@ export default function App() {
      or utility strip), so the storefront chrome must not render there either —
      otherwise the page starts ~77px low and every element below shifts. */
   const isPortal =
-    /^\/(profile|orders|login|wholesale|admin|seller)(\.html)?$/.test(location.pathname);
+    /^\/(profile|orders|login|register|wholesale|admin|seller)(\.html)?$/.test(location.pathname);
 
   /* Public browsing: visitors can freely explore the storefront (/), categories,
      product pages, and artisan profiles (/artisans, /artisans/:slug).
@@ -247,6 +247,8 @@ export default function App() {
         <Route path="/seller.html" element={<SellerPage />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/login.html" element={<LoginPage />} />
+        <Route path="/register" element={<LoginPage />} />
+        <Route path="/register.html" element={<LoginPage />} />
         <Route path="/orders" element={<OrdersPage />} />
         <Route path="/orders.html" element={<OrdersPage />} />
         <Route path="/profile" element={<ProfilePage />} />

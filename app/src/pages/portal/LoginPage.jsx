@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useStore } from '../../state/StoreContext.jsx';
 import {
   clearPendingClerkAuthMode,
@@ -40,13 +40,17 @@ function AppleGlyph() {
 
 export default function LoginPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [params] = useSearchParams();
   const { user, toast } = useStore();
   const clerk = useClerkBridge();
 
+  const isRegisterRoute = /^\/register(\.html)?$/i.test(location.pathname);
   const initialRole = params.get('role') === 'artisan' ? 'artisan' : 'user';
   const initialMode =
-    params.get('mode') === 'register' || params.get('mode') === 'signup'
+    isRegisterRoute ||
+    params.get('mode') === 'register' ||
+    params.get('mode') === 'signup'
       ? 'register'
       : 'signin';
   const alreadyRegisteredNotice = params.get('already_registered') === '1';
@@ -123,8 +127,16 @@ export default function LoginPage() {
       setErrMsg(
         'No registered HunarLink account was found for that email. Please register first below.'
       );
+    } else if (isRegisterRoute) {
+      setAuthMode('register');
+    } else if (params.get('mode') === 'register' || params.get('mode') === 'signup') {
+      setAuthMode('register');
+    } else if (params.get('mode') === 'signin') {
+      setAuthMode('signin');
+    } else {
+      setAuthMode('signin');
     }
-  }, [params]);
+  }, [isRegisterRoute, params]);
 
   useEffect(() => {
     if (signedIn && isArtisanSession && !isVerifiedArtisan) {
@@ -208,7 +220,7 @@ export default function LoginPage() {
             err.message ||
               'No registered HunarLink Buyer account was found for that email. Please register first below.'
           );
-          navigate('/login?mode=register&not_registered=1', { replace: true });
+          navigate('/register?not_registered=1', { replace: true });
         }
       } else {
         setErrMsg(err?.message || 'Invalid email or password.');
@@ -247,6 +259,7 @@ export default function LoginPage() {
           err.message ||
             'This email already exists in HunarLink. Switched to Sign In — please sign in below.'
         );
+        navigate(role === 'artisan' ? '/login?role=artisan' : '/login', { replace: true });
       } else if (err?.code === 'NOT_REGISTERED') {
         setEmailStep('input');
         if (role === 'artisan') {
@@ -257,7 +270,7 @@ export default function LoginPage() {
             err.message ||
               'No registered HunarLink Buyer account was found for that email. Please register first below.'
           );
-          navigate('/login?mode=register&not_registered=1', { replace: true });
+          navigate('/register?not_registered=1', { replace: true });
         }
       } else {
         setErrMsg(err?.message || 'Could not send email code. Try Sign in with Google.');
@@ -493,6 +506,7 @@ export default function LoginPage() {
                         setEmailStep('input');
                         setCode('');
                         setErrMsg('');
+                        navigate(role === 'artisan' ? '/login?role=artisan' : '/login', { replace: true });
                       }}
                     >
                       Sign In
@@ -506,6 +520,7 @@ export default function LoginPage() {
                         setEmailStep('input');
                         setCode('');
                         setErrMsg('');
+                        navigate(role === 'artisan' ? '/register?role=artisan' : '/register', { replace: true });
                       }}
                     >
                       Register
@@ -524,6 +539,7 @@ export default function LoginPage() {
                       onClick={() => {
                         setRole('user');
                         setErrMsg('');
+                        navigate(authMode === 'register' ? '/register' : '/login', { replace: true });
                       }}
                     >
                       <IconUser size={14} />
@@ -537,6 +553,10 @@ export default function LoginPage() {
                       onClick={() => {
                         setRole('artisan');
                         setErrMsg('');
+                        navigate(
+                          authMode === 'register' ? '/register?role=artisan' : '/login?role=artisan',
+                          { replace: true }
+                        );
                       }}
                     >
                       <IconSpark size={14} />
