@@ -961,3 +961,276 @@ def test_11_admin_overview_and_users_by_role_separate_registered_vs_logged_in(
     assert "buyer.active@example.com" not in regonly_emails
 
     app.dependency_overrides.pop(get_current_principal, None)
+
+
+def test_12_self_delete_account_anonymizes_wipes_pii_and_allows_fresh_reregistration(
+    app_and_client, db_session
+):
+    from decimal import Decimal
+    from fastapi import HTTPException
+    import pytest
+    from app.core.auth import load_principal_by_clerk_id
+    from app.models.core_models import (
+        RetailOrder,
+        UserAddress,
+        UserLoginLog,
+        UserRoleAssignment,
+    )
+    from tests.conftest import seed_marketplace_entities
+
+    app, client = app_and_client
+    entities = seed_marketplace_entities(db_session)
+
+    # 1. Register & sign in as a buyer, create address, and attach a completed DELIVERED order
+    _set_clerk_claims(app, {"sub": "user_self_del_01", "email": "self.del@example.com"})
+    reg = client.post(
+        "/api/v1/auth/sync",
+        json={
+            "email": "self.del@example.com",
+            "email_verified": True,
+            "first_name": "Aarav",
+            "last_name": "Kapoor",
+            "phone": "+91 9811100001",
+            "requested_role": "buyer",
+            "auth_mode": "signup",
+        },
+    )
+    assert reg.status_code == 200
+    old_user_id = reg.json()["user_id"]
+
+    principal = load_principal_by_clerk_id(db_session, "user_self_del_01")
+    set_authenticated_principal(app, principal)
+
+    addr = client.post(
+        "/api/v1/auth/addresses",
+        json={
+            "recipient_name": "Aarav Kapoor",
+            "recipient_phone": "+91 9811100001",
+            "line1": "12 Dal Lake Road",
+            "city": "Srinagar",
+            "state_province": "Jammu and Kashmir",
+            "postal_code": "190001",
+        },
+    )
+    assert addr.status_code == 201
+
+    completed_order = RetailOrder(
+        order_number="HL-TEST-DELIVERED-01",
+        customer_user_id=old_user_id,
+        shipping_address_snapshot_json={"city": "Srinagar"},
+        currency_code="INR",
+        subtotal_amount=Decimal("2500.00"),
+        total_amount=Decimal("2500.00"),
+        payment_status="PAID",
+        fulfilment_status="DELIVERED",
+    )
+    db_session.add(completed_order)
+    db_session.commit()
+
+    # 2. Delete own account -> 200 OK
+    del_resp = client.post(
+        "/api/v1/auth/me/delete",
+        json={"reason": "No longer needed"},
+    )
+    assert del_resp.status_code == 200
+    assert del_resp.json()["deleted"] is True
+    assert del_resp.json()["anonymized"] is True
+
+    app.dependency_overrides.pop(get_current_principal, None)
+    db_session.expire_all()
+
+    # 3. Verify PII wiped, roles revoked, addresses & login logs deleted, historical order intact
+    old_user = db_session.scalar(select(User).where(User.id == old_user_id))
+    assert old_user is not None
+    assert old_user.account_status == "DEACTIVATED"
+    assert old_user.email == f"deleted+{old_user_id}@deleted.hunarlink.local"
+    assert old_user.clerk_user_id == f"deleted_{old_user_id}"
+    assert old_user.phone is None
+    assert old_user.first_name == "Deleted"
+
+    assert db_session.scalars(select(UserAddress).where(UserAddress.user_id == old_user_id)).all() == []
+    assert db_session.scalars(select(UserLoginLog).where(UserLoginLog.user_id == old_user_id)).all() == []
+    uras = db_session.scalars(
+        select(UserRoleAssignment).where(UserRoleAssignment.user_id == old_user_id)
+    ).all()
+    assert all(u.assignment_status == "REVOKED" for u in uras)
+    assert db_session.scalar(select(RetailOrder).where(RetailOrder.order_number == "HL-TEST-DELIVERED-01")) is not None
+
+    # 4. Old identity cannot authenticate or sign in
+    with pytest.raises(HTTPException) as exc_info:
+        load_principal_by_clerk_id(db_session, "user_self_del_01")
+    assert exc_info.value.status_code == 401
+
+    chk = client.post(
+        "/api/v1/auth/check-account",
+        json={"email": "self.del@example.com", "requested_role": "buyer"},
+    )
+    assert chk.status_code == 200
+    assert chk.json()["exists"] is False
+
+    _set_clerk_claims(app, {"sub": "user_self_del_02", "email": "self.del@example.com"})
+    old_signin = client.post(
+        "/api/v1/auth/sync",
+        json={
+            "email": "self.del@example.com",
+            "first_name": "Aarav",
+            "requested_role": "buyer",
+            "auth_mode": "signin",
+        },
+    )
+    assert old_signin.status_code == 404
+
+    # 5. Fresh re-registration with the same email succeeds cleanly as a brand-new user
+    new_reg = client.post(
+        "/api/v1/auth/sync",
+        json={
+            "email": "self.del@example.com",
+            "email_verified": True,
+            "first_name": "Aarav",
+            "requested_role": "buyer",
+            "auth_mode": "signup",
+        },
+    )
+    assert new_reg.status_code == 200
+    assert new_reg.json()["is_new_user"] is True
+    assert new_reg.json()["user_id"] != old_user_id
+
+    # Admin overview excludes anonymized account and reflects only active accounts
+    _set_clerk_claims(app, None)
+    set_authenticated_principal(app, entities["admin_principal"])
+    ov = client.get("/api/v1/admin/overview").json()
+    assert ov["counts"]["deactivated_users"] >= 1
+    buyer_emails = {u["email"] for u in ov["role_directory"]["buyers"]["registered"]}
+    assert f"deleted+{old_user_id}@deleted.hunarlink.local" not in buyer_emails
+    assert "self.del@example.com" in buyer_emails
+
+    app.dependency_overrides.pop(get_current_principal, None)
+
+
+def test_13_self_delete_blocked_for_active_orders_and_admins(app_and_client, db_session):
+    from decimal import Decimal
+    from app.core.auth import load_principal_by_clerk_id
+    from app.models.core_models import RetailOrder
+    from tests.conftest import seed_marketplace_entities
+
+    app, client = app_and_client
+    entities = seed_marketplace_entities(db_session)
+
+    # 1. Admin self-delete is strictly forbidden (403)
+    set_authenticated_principal(app, entities["admin_principal"])
+    admin_del = client.post("/api/v1/auth/me/delete", json={})
+    assert admin_del.status_code == 403
+    app.dependency_overrides.pop(get_current_principal, None)
+
+    # 2. Buyer with an active CONFIRMED order cannot delete account (409)
+    _set_clerk_claims(app, {"sub": "user_active_order_01", "email": "active.order@example.com"})
+    reg = client.post(
+        "/api/v1/auth/sync",
+        json={
+            "email": "active.order@example.com",
+            "first_name": "Zoya",
+            "requested_role": "buyer",
+            "auth_mode": "signup",
+        },
+    )
+    assert reg.status_code == 200
+    uid = reg.json()["user_id"]
+    _set_clerk_claims(app, None)
+
+    db_session.add(
+        RetailOrder(
+            order_number="HL-TEST-ACTIVE-99",
+            customer_user_id=uid,
+            shipping_address_snapshot_json={"city": "Delhi"},
+            currency_code="INR",
+            subtotal_amount=Decimal("4200.00"),
+            total_amount=Decimal("4200.00"),
+            payment_status="PAID",
+            fulfilment_status="CONFIRMED",
+        )
+    )
+    db_session.commit()
+
+    principal = load_principal_by_clerk_id(db_session, "user_active_order_01")
+    set_authenticated_principal(app, principal)
+    blocked = client.post("/api/v1/auth/me/delete", json={})
+    assert blocked.status_code == 409
+    assert "HL-TEST-ACTIVE-99" in blocked.json()["detail"]
+
+    still_active = db_session.scalar(select(User).where(User.id == uid))
+    assert still_active.account_status == "ACTIVE"
+    app.dependency_overrides.pop(get_current_principal, None)
+
+
+def test_14_self_delete_server_side_clerk_password_verification(
+    app_and_client, db_session, monkeypatch
+):
+    from pydantic import SecretStr
+    from app.core.auth import load_principal_by_clerk_id
+    from app.core.config import get_settings
+
+    app, client = app_and_client
+
+    _set_clerk_claims(app, {"sub": "user_pwd_del_01", "email": "pwd.del@example.com"})
+    reg = client.post(
+        "/api/v1/auth/sync",
+        json={
+            "email": "pwd.del@example.com",
+            "first_name": "Rohan",
+            "requested_role": "buyer",
+            "auth_mode": "signup",
+        },
+    )
+    assert reg.status_code == 200
+    uid = reg.json()["user_id"]
+    _set_clerk_claims(app, None)
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "clerk_secret_key", SecretStr("sk_test_mock_secret"))
+    app.dependency_overrides[get_settings] = lambda: settings
+
+    class _MockResp:
+        def __init__(self, status_code, data=None):
+            self.status_code = status_code
+            self._data = data or {}
+
+        def json(self):
+            return self._data
+
+    def _fake_post(url, headers=None, json=None, timeout=None):
+        if json and json.get("password") == "RightCurrentPassword#2026":
+            return _MockResp(200, {"verified": True})
+        return _MockResp(422, {"errors": [{"code": "form_password_incorrect"}]})
+
+    deleted_calls = []
+
+    def _fake_delete(url, headers=None, timeout=None):
+        deleted_calls.append(url)
+        return _MockResp(200, {"deleted": True})
+
+    monkeypatch.setattr("app.modules.auth.router.httpx.post", _fake_post)
+    monkeypatch.setattr("app.modules.auth.router.httpx.delete", _fake_delete)
+
+    principal = load_principal_by_clerk_id(db_session, "user_pwd_del_01")
+    set_authenticated_principal(app, principal)
+
+    # Wrong current password -> 401 and account remains ACTIVE
+    bad = client.post(
+        "/api/v1/auth/me/delete",
+        json={"current_password": "WrongPassword!"},
+    )
+    assert bad.status_code == 401
+    assert db_session.scalar(select(User).where(User.id == uid)).account_status == "ACTIVE"
+    assert deleted_calls == []
+
+    # Correct current password -> 200 and Clerk delete called
+    good = client.post(
+        "/api/v1/auth/me/delete",
+        json={"current_password": "RightCurrentPassword#2026"},
+    )
+    assert good.status_code == 200
+    assert good.json()["clerk_deleted"] is True
+    assert deleted_calls == ["https://api.clerk.com/v1/users/user_pwd_del_01"]
+
+    app.dependency_overrides.pop(get_current_principal, None)
+    app.dependency_overrides.pop(get_settings, None)

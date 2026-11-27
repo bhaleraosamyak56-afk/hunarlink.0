@@ -13,8 +13,9 @@ from __future__ import annotations
 import re
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import select
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
+import httpx
+from sqlalchemy import delete, inspect as sa_inspect, select, text
 from sqlalchemy.orm import Session
 
 from app.core.admin_security import create_admin_session_token, verify_admin_password
@@ -39,6 +40,7 @@ from app.models.core_models import (
     PlatformRole,
     RetailOrder,
     SellerDocument,
+    SellerFulfilmentGroup,
     SellerProductListing,
     SellerProfile,
     SellerVerificationApplication,
@@ -46,6 +48,7 @@ from app.models.core_models import (
     UserAddress,
     UserLoginLog,
     UserRoleAssignment,
+    WholesaleOrder,
 )
 from app.models.guardrail_models import FileSecurityScan
 from app.modules.auth.schemas import (
@@ -57,6 +60,8 @@ from app.modules.auth.schemas import (
     ArtisanVerificationSubmitResponse,
     AuthSyncRequest,
     AuthUserProfileResponse,
+    DeleteAccountRequest,
+    DeleteAccountResponse,
     SellerProfileBrief,
     UserAddressCreateRequest,
     UserAddressResponse,
@@ -258,17 +263,17 @@ def _is_admin_account(db: Session, user_id: str, role_codes: list[str]) -> bool:
     ):
         return True
     try:
-        AdminCredential.__table__.create(bind=db.get_bind(), checkfirst=True)
-        if (
-            db.scalar(
-                select(AdminCredential.id).where(
-                    AdminCredential.user_id == user_id,
-                    AdminCredential.is_active == True,  # noqa: E712
+        if sa_inspect(db.connection()).has_table("admin_credentials"):
+            if (
+                db.scalar(
+                    select(AdminCredential.id).where(
+                        AdminCredential.user_id == user_id,
+                        AdminCredential.is_active == True,  # noqa: E712
+                    )
                 )
-            )
-            is not None
-        ):
-            return True
+                is not None
+            ):
+                return True
     except Exception:
         pass
     return False
@@ -283,7 +288,8 @@ def _record_auth_event(
     auth_method: str,
     request: Request,
 ) -> None:
-    UserLoginLog.__table__.create(bind=db.get_bind(), checkfirst=True)
+    if not sa_inspect(db.connection()).has_table("user_login_logs"):
+        UserLoginLog.__table__.create(bind=db.get_bind(), checkfirst=True)
     ip_addr = request.client.host if request.client else None
     ua = request.headers.get("user-agent")
     db.add(
@@ -538,6 +544,287 @@ def get_my_profile(
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
     return _build_user_response(db, user, is_new_user=False)
+
+
+def _verify_clerk_password_server_side(
+    clerk_user_id: str,
+    password: str,
+    secret_key: str,
+) -> None:
+    """Verify current password via Clerk Backend API when CLERK_SECRET_KEY is configured."""
+    try:
+        resp = httpx.post(
+            f"https://api.clerk.com/v1/users/{clerk_user_id}/verify_password",
+            headers={"Authorization": f"Bearer {secret_key}"},
+            json={"password": password},
+            timeout=8.0,
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not verify password with Clerk authentication service.",
+        ) from exc
+
+    if resp.status_code == 200 and resp.json().get("verified") is True:
+        return
+    if resp.status_code in (400, 401, 422):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Current password is incorrect. Account deletion aborted.",
+        )
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Could not verify current password with Clerk.",
+    )
+
+
+def _delete_clerk_user_server_side(clerk_user_id: str, secret_key: str) -> bool:
+    """Best-effort Clerk user deletion after MySQL deactivation succeeds."""
+    if not secret_key or clerk_user_id.startswith("deleted_"):
+        return False
+    try:
+        resp = httpx.delete(
+            f"https://api.clerk.com/v1/users/{clerk_user_id}",
+            headers={"Authorization": f"Bearer {secret_key}"},
+            timeout=8.0,
+        )
+        return resp.status_code in (200, 204, 404)
+    except httpx.HTTPError:
+        return False
+
+
+def _execute_self_delete(
+    *,
+    payload: DeleteAccountRequest,
+    request: Request,
+    principal: AuthenticatedPrincipal,
+    db: Session,
+    settings: Settings,
+) -> DeleteAccountResponse:
+    user = db.scalar(select(User).where(User.id == principal.user_id))
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+
+    existing_roles = _get_user_active_roles(db, user.id)
+    if _is_admin_account(db, user.id, existing_roles) or principal.is_active_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrator accounts cannot be self-deleted. Revoke admin access via an authorized administrator.",
+        )
+
+    # 1. Block deletion if the user still has active / uncompleted retail orders
+    active_orders = list(
+        db.scalars(
+            select(RetailOrder.order_number).where(
+                RetailOrder.customer_user_id == user.id,
+                (
+                    RetailOrder.fulfilment_status.in_(
+                        ["CONFIRMED", "PROCESSING", "PARTIALLY_SHIPPED", "SHIPPED"]
+                    )
+                    | (
+                        (RetailOrder.fulfilment_status == "PENDING_PAYMENT")
+                        & RetailOrder.payment_status.in_(["AUTHORIZED", "PAID", "COD_PENDING"])
+                    )
+                ),
+            )
+        ).all()
+    )
+    if active_orders:
+        order_list = ", ".join(active_orders[:5])
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"You have active order(s) in progress ({order_list}). Please wait until delivery or cancellation completes before deleting your account.",
+        )
+
+    # Check open wholesale orders
+    active_wholesale = list(
+        db.scalars(
+            select(WholesaleOrder.order_number).where(
+                WholesaleOrder.buyer_user_id == user.id,
+                WholesaleOrder.fulfilment_status.in_(
+                    ["CONFIRMED", "PROCESSING", "PARTIALLY_SHIPPED", "SHIPPED"]
+                ),
+            )
+        ).all()
+    )
+    if active_wholesale:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="You have active wholesale order(s) in progress. Please wait until completion before deleting your account.",
+        )
+
+    # Check open seller fulfilments if the caller has a seller profile
+    seller = db.scalar(select(SellerProfile).where(SellerProfile.user_id == user.id))
+    if seller is not None:
+        active_fulfilments = list(
+            db.scalars(
+                select(SellerFulfilmentGroup.id).where(
+                    SellerFulfilmentGroup.seller_profile_id == seller.id,
+                    SellerFulfilmentGroup.fulfilment_status.notin_(["DELIVERED", "CANCELLED"]),
+                )
+            ).all()
+        )
+        if active_fulfilments:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="You have active artisan order fulfilments in progress. Complete or cancel them before deleting your account.",
+            )
+
+    # Check optional MySQL return_requests table if present (inspect via db.connection() to stay inside tx)
+    insp = sa_inspect(db.connection())
+    if insp.has_table("return_requests"):
+        open_returns = db.execute(
+            text(
+                "SELECT return_number FROM return_requests "
+                "WHERE requested_by_user_id = :uid "
+                "AND return_status NOT IN ('REJECTED', 'CLOSED', 'CANCELLED')"
+            ),
+            {"uid": user.id},
+        ).fetchall()
+        if open_returns:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="You have an open return or refund request. Please wait until it closes before deleting your account.",
+            )
+
+    # 2. Optional server-side Clerk password verification when CLERK_SECRET_KEY is configured
+    original_clerk_id = user.clerk_user_id
+    clerk_secret = settings.clerk_secret_key.get_secret_value().strip()
+    if clerk_secret and payload.current_password:
+        _verify_clerk_password_server_side(
+            original_clerk_id, payload.current_password, clerk_secret
+        )
+
+    # 3. Revoke active roles & archive any seller listings
+    now = utcnow()
+    assignments = list(
+        db.scalars(
+            select(UserRoleAssignment).where(
+                UserRoleAssignment.user_id == user.id,
+                UserRoleAssignment.assignment_status == "ACTIVE",
+            )
+        ).all()
+    )
+    for ura in assignments:
+        ura.assignment_status = "REVOKED"
+        ura.revoked_at = now
+        ura.status_reason = "Account self-deleted by user"
+
+    if seller is not None:
+        seller.profile_status = "TERMINATED"
+        seller.verification_status = "REVOKED"
+        seller.updated_at = now
+        for listing in db.scalars(
+            select(SellerProductListing).where(SellerProductListing.seller_profile_id == seller.id)
+        ).all():
+            listing.listing_status = "ARCHIVED"
+            listing.updated_at = now
+
+    # 4. Delete personal/ephemeral data (addresses, carts, wishlists, login logs)
+    db.execute(delete(UserAddress).where(UserAddress.user_id == user.id))
+    if insp.has_table("user_login_logs"):
+        db.execute(delete(UserLoginLog).where(UserLoginLog.user_id == user.id))
+
+    if insp.has_table("carts"):
+        if insp.has_table("cart_items"):
+            db.execute(
+                text(
+                    "DELETE FROM cart_items WHERE cart_id IN "
+                    "(SELECT id FROM carts WHERE user_id = :uid)"
+                ),
+                {"uid": user.id},
+            )
+        db.execute(text("DELETE FROM carts WHERE user_id = :uid"), {"uid": user.id})
+    if insp.has_table("wishlists"):
+        if insp.has_table("wishlist_items"):
+            db.execute(
+                text(
+                    "DELETE FROM wishlist_items WHERE wishlist_id IN "
+                    "(SELECT id FROM wishlists WHERE user_id = :uid)"
+                ),
+                {"uid": user.id},
+            )
+        db.execute(text("DELETE FROM wishlists WHERE user_id = :uid"), {"uid": user.id})
+
+    # 5. Soft-delete & anonymize `users` so append-only `audit_logs` & past orders remain intact
+    #    while freeing the real email + clerk_user_id for fresh re-registration.
+    anonymized_email = f"deleted+{user.id}@deleted.hunarlink.local"
+    user.account_status = "DEACTIVATED"
+    user.suspended_reason = (payload.reason or "Self-deleted by user").strip()[:500]
+    user.email = anonymized_email
+    user.clerk_user_id = f"deleted_{user.id}"
+    user.email_verified = False
+    user.phone = None
+    user.phone_verified = False
+    user.first_name = "Deleted"
+    user.last_name = None
+    user.display_name = "Deleted User"
+    user.avatar_storage_key = None
+    user.last_login_at = None
+    user.updated_at = now
+
+    record_audit_log(
+        db,
+        actor_user_id=user.id,
+        actor_role=existing_roles[0] if existing_roles else "CUSTOMER",
+        action="USER_SELF_DELETED",
+        target_type="users",
+        target_id=user.id,
+        correlation_id=getattr(request.state, "correlation_id", "") or str(uuid.uuid4()),
+        new_values={
+            "account_status": "DEACTIVATED",
+            "anonymized": True,
+            "revoked_roles": existing_roles,
+        },
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+
+    db.commit()
+
+    clerk_deleted = _delete_clerk_user_server_side(original_clerk_id, clerk_secret)
+    return DeleteAccountResponse(
+        deleted=True,
+        anonymized=True,
+        clerk_deleted=clerk_deleted,
+        message="Your HunarLink account has been permanently deleted.",
+    )
+
+
+@router.post("/me/delete", response_model=DeleteAccountResponse)
+def delete_my_account_post(
+    payload: DeleteAccountRequest,
+    request: Request,
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> DeleteAccountResponse:
+    """Self-delete the authenticated user's account (POST endpoint for reliable JSON body)."""
+    return _execute_self_delete(
+        payload=payload,
+        request=request,
+        principal=principal,
+        db=db,
+        settings=settings,
+    )
+
+
+@router.delete("/me", response_model=DeleteAccountResponse)
+def delete_my_account_rest(
+    request: Request,
+    payload: DeleteAccountRequest | None = Body(default=None),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> DeleteAccountResponse:
+    """REST DELETE alias for self-service account deletion."""
+    return _execute_self_delete(
+        payload=payload or DeleteAccountRequest(),
+        request=request,
+        principal=principal,
+        db=db,
+        settings=settings,
+    )
 
 
 @router.post(

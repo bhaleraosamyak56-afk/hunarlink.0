@@ -134,9 +134,20 @@ export default function ProfilePage() {
     preferredUpi: profile.preferredUpi || '',
     preferredPayment: profile.preferredPayment || 'UPI Verified Escrow'
   });
+  const [deletePanelOpen, setDeletePanelOpen] = useState(false);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [deleteEmailCode, setDeleteEmailCode] = useState('');
+  const [deleteCodeSent, setDeleteCodeSent] = useState(false);
+  const [deleteReason, setDeleteReason] = useState('');
+  const [deleteError, setDeleteError] = useState('');
+  const [deletingAccount, setDeletingAccount] = useState(false);
+  const [sendingDeleteCode, setSendingDeleteCode] = useState(false);
 
   const photoInput = useRef(null);
   const avatarInput = useRef(null);
+  const deleteSectionRef = useRef(null);
+  const clerkUser = clerk?.clerkUser || null;
+  const passwordEnabled = clerkUser ? Boolean(clerkUser.passwordEnabled) : true;
 
   useEffect(() => {
     setBuyerProfile(profile);
@@ -429,6 +440,17 @@ export default function ProfilePage() {
               onClick={signOut}>
               <span>Sign Out</span>
             </button>
+            <button type="button" className="fk-nav-item"
+              style={{paddingLeft: '18px', color: 'var(--danger-600)', fontSize: '0.82rem'}}
+              onClick={() => {
+                setTab('personal');
+                setDeletePanelOpen(true);
+                setTimeout(() => {
+                  deleteSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }, 60);
+              }}>
+              <span>Delete Account</span>
+            </button>
           </div>
         </div>
       </aside>
@@ -577,6 +599,178 @@ export default function ProfilePage() {
               <div className="faq-q">Are my saved delivery addresses available during checkout?</div>
               <div className="faq-a">Yes! Every address you add or set as default under Manage Addresses appears automatically inside HunarLink Checkout.</div>
             </div>
+          </div>
+
+          {/* Block E: Permanent Account Deletion (Password Reverification) */}
+          <div
+            className="fk-section-block"
+            ref={deleteSectionRef}
+            style={{
+              marginTop: '18px',
+              padding: '18px',
+              borderRadius: '12px',
+              border: '1px solid rgba(185, 28, 28, 0.25)',
+              background: 'rgba(185, 28, 28, 0.04)'
+            }}
+          >
+            <div className="fk-block-head" style={{marginBottom: '8px'}}>
+              <h3 style={{fontSize: '1.1rem', color: 'var(--danger-600)', margin: 0}}>
+                Delete Account
+              </h3>
+              <button
+                type="button"
+                className="btn-link-edit"
+                style={{color: 'var(--danger-600)'}}
+                onClick={() => {
+                  setDeletePanelOpen((v) => !v);
+                  setDeleteError('');
+                }}
+              >
+                {deletePanelOpen ? 'Cancel' : 'Deactivate & Delete'}
+              </button>
+            </div>
+            <p style={{fontSize: '0.84rem', color: 'var(--text-700)', marginBottom: deletePanelOpen ? '14px' : 0}}>
+              Permanently delete your HunarLink account, saved addresses, and wishlist. Active orders in progress must be delivered or cancelled first. Once deleted, you cannot log back into this account and must register again to return.
+            </p>
+
+            {deletePanelOpen && (
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  setDeleteError('');
+                  if (!clerk?.enabled || typeof clerk.deleteMyAccount !== 'function') {
+                    setDeleteError('Account deletion requires an active Clerk authentication session.');
+                    return;
+                  }
+                  setDeletingAccount(true);
+                  try {
+                    await clerk.deleteMyAccount({
+                      currentPassword: deletePassword,
+                      emailCode: deleteEmailCode,
+                      reason: deleteReason
+                    });
+                    toast('Your HunarLink account has been permanently deleted.');
+                    navigate('/login?mode=register&account_deleted=1', { replace: true });
+                  } catch (err) {
+                    setDeleteError(err?.message || 'Could not delete your account. Please try again.');
+                  } finally {
+                    setDeletingAccount(false);
+                  }
+                }}
+                style={{maxWidth: '460px'}}
+              >
+                {deleteError && (
+                  <div
+                    role="alert"
+                    style={{
+                      padding: '10px 12px',
+                      marginBottom: '12px',
+                      borderRadius: '8px',
+                      background: 'rgba(185, 28, 28, 0.1)',
+                      color: '#991b1b',
+                      fontSize: '0.84rem',
+                      fontWeight: 600
+                    }}
+                  >
+                    {deleteError}
+                  </div>
+                )}
+
+                {passwordEnabled ? (
+                  <div style={{marginBottom: '12px'}}>
+                    <label className="up-label" htmlFor="delete-current-password">
+                      Enter Your Current Password to Confirm *
+                    </label>
+                    <input
+                      type="password"
+                      id="delete-current-password"
+                      className="up-input"
+                      required
+                      autoComplete="current-password"
+                      placeholder="Current account password"
+                      value={deletePassword}
+                      onChange={(e) => setDeletePassword(e.target.value)}
+                    />
+                  </div>
+                ) : (
+                  <div style={{marginBottom: '12px'}}>
+                    <p style={{fontSize: '0.82rem', color: 'var(--text-700)', marginBottom: '8px'}}>
+                      Your account signs in with Google / Apple (no password set). Request a 6-digit verification code sent to <strong>{profile.email}</strong> to confirm deletion.
+                    </p>
+                    <div style={{display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap'}}>
+                      <button
+                        type="button"
+                        className="btn-orange-outline"
+                        disabled={sendingDeleteCode || deletingAccount}
+                        onClick={async () => {
+                          setDeleteError('');
+                          setSendingDeleteCode(true);
+                          try {
+                            await clerk.sendDeleteVerificationCode();
+                            setDeleteCodeSent(true);
+                            toast('Verification code sent to your email.');
+                          } catch (err) {
+                            setDeleteError(err?.message || 'Could not send verification code.');
+                          } finally {
+                            setSendingDeleteCode(false);
+                          }
+                        }}
+                      >
+                        {sendingDeleteCode
+                          ? 'Sending...'
+                          : deleteCodeSent
+                            ? 'Resend Code'
+                            : 'Send Verification Code'}
+                      </button>
+                    </div>
+                    {deleteCodeSent && (
+                      <div>
+                        <label className="up-label" htmlFor="delete-email-code">
+                          6-Digit Email Verification Code *
+                        </label>
+                        <input
+                          type="text"
+                          id="delete-email-code"
+                          className="up-input"
+                          required
+                          inputMode="numeric"
+                          placeholder="Enter 6-digit code"
+                          value={deleteEmailCode}
+                          onChange={(e) => setDeleteEmailCode(e.target.value)}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div style={{marginBottom: '14px'}}>
+                  <label className="up-label" htmlFor="delete-reason">
+                    Reason (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    id="delete-reason"
+                    className="up-input"
+                    placeholder="Optional feedback"
+                    value={deleteReason}
+                    onChange={(e) => setDeleteReason(e.target.value)}
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  className="btn-orange"
+                  disabled={deletingAccount || (!passwordEnabled && !deleteCodeSent)}
+                  style={{
+                    background: '#b91c1c',
+                    borderColor: '#b91c1c',
+                    opacity: deletingAccount || (!passwordEnabled && !deleteCodeSent) ? 0.65 : 1
+                  }}
+                >
+                  {deletingAccount ? 'Deleting Account...' : 'Permanently Delete My Account'}
+                </button>
+              </form>
+            )}
           </div>
         </div>
 

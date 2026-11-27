@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     clerk_jwks_url: str = Field(default="")
     clerk_audience: str = Field(default="")
     clerk_webhook_secret: SecretStr = Field(default=SecretStr(""))
+    clerk_secret_key: SecretStr = Field(default=SecretStr(""))
 
     # Dedicated Admin Email+Password JWT signing secret (HS256; never hardcode in prod)
     admin_jwt_secret: SecretStr = Field(default=SecretStr(""))

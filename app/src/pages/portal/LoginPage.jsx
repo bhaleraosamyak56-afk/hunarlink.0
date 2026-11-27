@@ -51,20 +51,25 @@ export default function LoginPage() {
       : 'signin';
   const alreadyRegisteredNotice = params.get('already_registered') === '1';
   const notRegisteredNotice = params.get('not_registered') === '1';
+  const accountDeletedNotice = params.get('account_deleted') === '1';
   const roleConflictNotice = params.get('role_conflict') === '1';
   const conflictMsg = params.get('conflict_msg') || '';
   const nextUrl = params.get('next') || '/';
 
-  const [authMode, setAuthMode] = useState(notRegisteredNotice ? 'register' : initialMode); // 'signin' | 'register'
+  const [authMode, setAuthMode] = useState(
+    notRegisteredNotice || accountDeletedNotice ? 'register' : initialMode
+  ); // 'signin' | 'register'
   const [role, setRole] = useState(initialRole);
   const [errMsg, setErrMsg] = useState(
     roleConflictNotice
       ? conflictMsg || 'This account is registered under a different role in HunarLink.'
-      : alreadyRegisteredNotice
-        ? 'This account already exists in HunarLink. You cannot register again — please Sign In below.'
-        : notRegisteredNotice
-          ? 'No registered HunarLink account was found for that email. Please register first below.'
-          : ''
+      : accountDeletedNotice
+        ? 'Your previous HunarLink account was permanently deleted. Register below if you want to create a brand-new account.'
+        : alreadyRegisteredNotice
+          ? 'This account already exists in HunarLink. You cannot register again — please Sign In below.'
+          : notRegisteredNotice
+            ? 'No registered HunarLink account was found for that email. Please register first below.'
+            : ''
   );
   const [busyProvider, setBusyProvider] = useState(null);
 
@@ -101,6 +106,14 @@ export default function LoginPage() {
       setCode('');
       setErrMsg(
         'This account already exists in HunarLink. Switched to Sign In — enter your email or use Google below to continue.'
+      );
+    } else if (params.get('account_deleted') === '1') {
+      setAuthMode('register');
+      setPendingFlow('signUp');
+      setEmailStep('input');
+      setCode('');
+      setErrMsg(
+        'Your previous HunarLink account was permanently deleted. Register below if you want to create a brand-new account.'
       );
     } else if (params.get('not_registered') === '1') {
       setAuthMode('register');

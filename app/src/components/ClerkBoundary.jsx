@@ -4,11 +4,17 @@ import {
   ClerkProvider,
   useAuth,
   useClerk,
+  useSession,
   useUser
 } from '@clerk/react';
 import { useSignIn, useSignUp } from '@clerk/react/legacy';
 import { useStore } from '../state/StoreContext.jsx';
-import { canAttemptBackend, checkAuthAccount, syncAuthenticatedUser } from '../services/apiClient.js';
+import {
+  canAttemptBackend,
+  checkAuthAccount,
+  deleteMyAccount as deleteMyAccountApi,
+  syncAuthenticatedUser
+} from '../services/apiClient.js';
 import {
   CLERK_PUBLISHABLE_KEY,
   CLERK_ROLE_MAP_KEY,
@@ -258,6 +264,7 @@ function ClerkBridgeInner({ children }) {
   const location = useLocation();
   const { isLoaded: userLoaded, isSignedIn, user: clerkUser } = useUser();
   const { isLoaded: authLoaded, getToken: clerkGetToken } = useAuth();
+  const { session: clerkSession } = useSession();
   const clerk = useClerk();
   const { isLoaded: signInLoaded, signIn } = useSignIn();
   const { isLoaded: signUpLoaded, signUp } = useSignUp();
@@ -1015,6 +1022,148 @@ function ClerkBridgeInner({ children }) {
     [clerk, signIn, signInLoaded]
   );
 
+  const sendDeleteVerificationCode = useCallback(async () => {
+    const activeSession = clerkSession || clerk?.session;
+    if (!isSignedIn || !clerkUser || !activeSession) {
+      throw new Error('You must be signed in to verify account deletion.');
+    }
+    const sv = await activeSession.startVerification({ level: 'first_factor' });
+    const emailFactor = sv?.supportedFirstFactors?.find((f) => f.strategy === 'email_code');
+    if (!emailFactor?.emailAddressId) {
+      throw new Error('Email verification is not available on this session.');
+    }
+    await activeSession.prepareFirstFactorVerification({
+      strategy: 'email_code',
+      emailAddressId: emailFactor.emailAddressId
+    });
+    return {
+      sent: true,
+      email: clerkUser.primaryEmailAddress?.emailAddress || ''
+    };
+  }, [clerk?.session, clerkSession, clerkUser, isSignedIn]);
+
+  const deleteMyAccount = useCallback(
+    async ({ currentPassword = '', emailCode = '', reason = '' } = {}) => {
+      const activeSession = clerkSession || clerk?.session;
+      if (!isSignedIn || !clerkUser || !activeSession) {
+        throw new Error('You must be signed in to delete your account.');
+      }
+
+      const hasPassword = Boolean(clerkUser.passwordEnabled);
+      if (hasPassword) {
+        const pwd = String(currentPassword || '');
+        if (!pwd) {
+          throw new Error('Please enter your current password to confirm account deletion.');
+        }
+        try {
+          await activeSession.startVerification({ level: 'first_factor' });
+          const verRes = await activeSession.attemptFirstFactorVerification({
+            strategy: 'password',
+            password: pwd
+          });
+          if (verRes?.status !== 'complete') {
+            throw new Error(
+              'Additional verification is required before deleting this account.'
+            );
+          }
+        } catch (err) {
+          const errCode = err?.errors?.[0]?.code || '';
+          const msg =
+            err?.errors?.[0]?.longMessage ||
+            err?.errors?.[0]?.message ||
+            err?.message ||
+            '';
+          if (
+            errCode === 'form_password_incorrect' ||
+            /incorrect|invalid/i.test(msg)
+          ) {
+            throw new Error('Incorrect current password. Your account was not deleted.');
+          }
+          throw new Error(msg || 'Could not verify your current password.');
+        }
+      } else {
+        const cleanedCode = String(emailCode || '').replace(/\s+/g, '');
+        if (!cleanedCode) {
+          throw new Error(
+            'Enter the 6-digit verification code sent to your email to confirm deletion.'
+          );
+        }
+        try {
+          const verRes = await activeSession.attemptFirstFactorVerification({
+            strategy: 'email_code',
+            code: cleanedCode
+          });
+          if (verRes?.status !== 'complete') {
+            throw new Error('Verification code was incomplete. Please request a fresh code.');
+          }
+        } catch (err) {
+          const msg =
+            err?.errors?.[0]?.longMessage ||
+            err?.errors?.[0]?.message ||
+            err?.message ||
+            '';
+          throw new Error(msg || 'Invalid or expired verification code.');
+        }
+      }
+
+      // Refresh JWT after reverification, then delete/anonymize in HunarLink DB FIRST
+      // (so active orders block deletion before touching the Clerk account).
+      let apiRes = { deleted: true, clerk_deleted: false };
+      if (canAttemptBackend()) {
+        const token = await clerkGetToken({ skipCache: true });
+        if (!token) {
+          throw new Error('Session token expired. Please sign in again and retry.');
+        }
+        apiRes = await deleteMyAccountApi(token, {
+          currentPassword: hasPassword ? String(currentPassword || '') : null,
+          reason: reason ? String(reason).trim() : null
+        });
+      }
+
+      // Delete identity from Clerk Cloud after DB succeeds
+      conflictSigningOutRef.current = true;
+      try {
+        if (!apiRes?.clerk_deleted && typeof clerkUser.delete === 'function') {
+          try {
+            await clerkUser.delete();
+          } catch (clerkDelErr) {
+            if (import.meta.env.DEV) {
+              console.warn(
+                '[HunarLink Auth] DB account deleted, but Clerk client self-delete threw:',
+                clerkDelErr?.message || clerkDelErr
+              );
+            }
+          }
+        }
+      } finally {
+        clearPendingClerkRole();
+        clearPendingClerkAuthMode();
+        lastDbSyncKeyRef.current = '';
+        syncedAccountIdsRef.current.clear();
+        clearSessionState();
+        setUser(null, { silent: true });
+        try {
+          if (clerk?.signOut) {
+            await clerk.signOut(() => {});
+          }
+        } catch {
+          /* ignore */
+        }
+        conflictSigningOutRef.current = false;
+      }
+      return apiRes;
+    },
+    [
+      clerk,
+      clerkGetToken,
+      clerkSession,
+      clerkUser,
+      clearSessionState,
+      isSignedIn,
+      setUser
+    ]
+  );
+
   const bridgeValue = useMemo(
     () => ({
       enabled: true,
@@ -1027,6 +1176,8 @@ function ClerkBridgeInner({ children }) {
       verifyEmailCode,
       signInWithPassword,
       signOutClerk,
+      sendDeleteVerificationCode,
+      deleteMyAccount,
       renderSsoCallback
     }),
     [
@@ -1039,6 +1190,8 @@ function ClerkBridgeInner({ children }) {
       verifyEmailCode,
       signInWithPassword,
       signOutClerk,
+      sendDeleteVerificationCode,
+      deleteMyAccount,
       renderSsoCallback
     ]
   );

@@ -90,6 +90,22 @@ class AuthUserProfileResponse(BaseModel):
     updated_at: datetime
 
 
+class DeleteAccountRequest(BaseModel):
+    """Self-service account deletion request after current-password / factor reverification."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    current_password: str | None = Field(default=None, max_length=256)
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class DeleteAccountResponse(BaseModel):
+    deleted: bool = True
+    anonymized: bool = True
+    clerk_deleted: bool = False
+    message: str
+
+
 class ArtisanVerificationSubmitRequest(BaseModel):
     """Artisan GI or Standard verification submission stored in seller_verification_applications."""
 

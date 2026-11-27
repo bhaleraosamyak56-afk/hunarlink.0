@@ -149,6 +149,8 @@ export const DEFAULT_CLERK_BRIDGE = {
   verifyEmailCode: null,
   signInWithPassword: null,
   signOutClerk: null,
+  sendDeleteVerificationCode: null,
+  deleteMyAccount: null,
   renderSsoCallback: null
 };
 

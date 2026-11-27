@@ -183,6 +183,17 @@ export function fetchMyAuthProfile(token) {
   return apiRequest('/api/v1/auth/me', { token });
 }
 
+export function deleteMyAccount(token, { currentPassword = null, reason = null } = {}) {
+  const body = {};
+  if (currentPassword) body.current_password = currentPassword;
+  if (reason) body.reason = reason;
+  return apiRequest('/api/v1/auth/me/delete', {
+    method: 'POST',
+    body,
+    token
+  });
+}
+
 export function submitArtisanVerification(payload, token) {
   return apiRequest('/api/v1/auth/artisan-verification', {
     method: 'POST',

@@ -785,7 +785,16 @@ def admin_live_overview(
     db: Session = Depends(get_db),
 ) -> dict:
     """Strictly admin-only real database snapshot for the Admin Console."""
-    users = list(db.scalars(select(User).order_by(User.created_at.desc()).limit(200)).all())
+    all_users = list(db.scalars(select(User).order_by(User.created_at.desc()).limit(200)).all())
+    users = [
+        u
+        for u in all_users
+        if not (
+            u.account_status == "DEACTIVATED"
+            and u.email.endswith("@deleted.hunarlink.local")
+        )
+    ]
+    deactivated_count = len(all_users) - len(users)
     sellers = list(db.scalars(select(SellerProfile).order_by(SellerProfile.created_at.desc()).limit(200)).all())
     applications = list(
         db.scalars(
@@ -816,7 +825,7 @@ def admin_live_overview(
         if rcode not in roles_by_user_id[uid]:
             roles_by_user_id[uid].append(rcode)
 
-    users_by_id = {u.id: u for u in users}
+    users_by_id = {u.id: u for u in all_users}
     sellers_by_id = {s.id: s for s in sellers}
     seller_by_user_id = {s.user_id: s for s in sellers}
     active_admin_user_ids = {ac.user_id for ac in admin_creds if ac.is_active}
@@ -946,6 +955,7 @@ def admin_live_overview(
         "admin_permissions": sorted(admin.admin_permissions),
         "counts": {
             "users": len(users),
+            "deactivated_users": deactivated_count,
             "sellers": len(sellers),
             "pending_applications": pending_apps_count,
             "incomplete_artisan_signups": len(incomplete_artisan_users),
