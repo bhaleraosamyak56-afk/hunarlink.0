@@ -139,7 +139,6 @@ def test_settings(tmp_path: Path) -> Settings:
         private_storage_dir=str(tmp_path / "private_uploads"),
         max_upload_size_bytes=512_000,
         malware_scanner_mode="pending_only",
-        gi_llm_provider="mock",
         razorpay_key_id="rzp_test_HunarLinkKeyId123",
         razorpay_key_secret=SecretStr("rzp_test_secret_NEVER_EXPOSE_987654321"),
         razorpay_webhook_secret=SecretStr("rzp_webhook_secret_SEPARATE_123456789"),

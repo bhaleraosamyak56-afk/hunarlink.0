@@ -67,9 +67,9 @@ export default function AdminCraftProofTab({ adminToken, toast }) {
     <div className="section-card">
       <div className="section-card-head" style={{ flexWrap: 'wrap', gap: 10 }}>
         <div>
-          <h3 className="section-card-title">CraftProof AI &mdash; Human Claim Verification Desk</h3>
+          <h3 className="section-card-title">CraftProof &mdash; Human Claim Verification Desk</h3>
           <p style={{ fontSize: '0.82rem', color: 'var(--text-500)', margin: '2px 0 0' }}>
-            AI can never verify claims. Only Human Administrators here can promote a product claim to{' '}
+            Only Human Administrators here can promote a product claim to{' '}
             <strong>HUMAN_VERIFIED</strong> or <strong>THIRD_PARTY_VERIFIED</strong> on the public QR Craft Passport.
           </p>
         </div>

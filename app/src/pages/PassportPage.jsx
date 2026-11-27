@@ -4,7 +4,6 @@ import {
   fetchPassportByCode,
   passportQrSvgUrl
 } from '../services/craftproofApi.js';
-import BuyerAssistantDrawer from '../components/craftproof/BuyerAssistantDrawer.jsx';
 
 const formatStatus = (s) => String(s || 'SELLER_DECLARED').replace(/_/g, ' ');
 const inr = (n) => '₹' + Number(n || 0).toLocaleString('en-IN');
@@ -37,7 +36,7 @@ export default function PassportPage() {
     return (
       <main id="main-content" className="cp-shell">
         <div className="cp-card" style={{ textAlign: 'center', padding: 48 }}>
-          <div className="cp-kicker">CraftProof AI Trust Network</div>
+          <div className="cp-kicker">CraftProof Trust Network</div>
           <p style={{ margin: 0 }}>Loading Digital Craft Passport <strong>{code}</strong>…</p>
         </div>
       </main>
@@ -67,7 +66,7 @@ export default function PassportPage() {
       <section className="cp-card-emerald" style={{ marginBottom: 20 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 20 }}>
           <div style={{ flex: 1, minWidth: 260 }}>
-            <div className="cp-kicker">HunarLink CraftProof AI &middot; Living Digital Craft Passport</div>
+            <div className="cp-kicker">HunarLink CraftProof &middot; Living Digital Craft Passport</div>
             <h1 style={{ margin: '0 0 8px', fontSize: '1.85rem', fontFamily: 'var(--font-serif, Georgia, serif)', color: '#fffdf8' }}>
               {product.name}
             </h1>
@@ -258,12 +257,6 @@ export default function PassportPage() {
         </section>
       )}
 
-      {/* Embedded Evidence-Locked Buyer Assistant */}
-      <BuyerAssistantDrawer
-        passportCode={passport.passport_code}
-        productName={product.name}
-      />
-
       {/* Immutable Verification Audit Timeline */}
       <section className="cp-card" style={{ marginTop: 18 }}>
         <div className="cp-kicker">Immutable Audit Ledger</div>
@@ -274,11 +267,9 @@ export default function PassportPage() {
           <div
             key={ev.event_id}
             className={`cp-timeline-item ${
-              ev.actor_type === 'AI_ADVISORY'
-                ? 'cp-timeline-item--ai'
-                : ['HUMAN_VERIFIED', 'THIRD_PARTY_VERIFIED'].includes(ev.to_status)
-                  ? 'cp-timeline-item--verified'
-                  : ''
+              ['HUMAN_VERIFIED', 'THIRD_PARTY_VERIFIED'].includes(ev.to_status)
+                ? 'cp-timeline-item--verified'
+                : ''
             }`}
           >
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 3 }}>

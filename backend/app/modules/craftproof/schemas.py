@@ -1,4 +1,4 @@
-"""Strict Pydantic DTOs for CraftProof AI Digital Passports, Claims & Verification."""
+"""Strict Pydantic DTOs for CraftProof Digital Passports, Claims & Verification."""
 from __future__ import annotations
 
 from typing import Any, Literal

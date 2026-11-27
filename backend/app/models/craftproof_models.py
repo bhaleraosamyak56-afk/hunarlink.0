@@ -1,4 +1,4 @@
-"""SQLAlchemy 2.x models for CraftProof AI Passports, Claims, Evidence & Demand Bridge.
+"""SQLAlchemy 2.x models for CraftProof Passports, Claims, Evidence & Demand Bridge.
 
 Added via Alembic revision `0004_add_craftproof_and_demand_bridge` (strictly additive —
 zero modifications to existing core or ASIGS tables).

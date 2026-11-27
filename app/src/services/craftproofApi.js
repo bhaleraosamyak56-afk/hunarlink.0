@@ -1,5 +1,5 @@
 /* ==========================================================================
-   craftproofApi.js — CraftProof AI, Local Ollama Gateway & Demand Bridge API
+   craftproofApi.js — CraftProof Passports & Demand Bridge API
    --------------------------------------------------------------------------
    Strictly additive API helpers using relative `/api/v1/...` paths (proxied
    automatically by Vite dev server to FastAPI `:8000` with zero localhost
@@ -93,44 +93,6 @@ export function decideAdminCraftClaim(claimId, payload, token) {
   return cpRequest(`/admin/passports/claims/${encodeURIComponent(claimId)}/decision`, {
     method: 'POST',
     token,
-    body: payload
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Local Ollama AI Gateway (Pillar 1A, 1B, 2, 3)
-// ---------------------------------------------------------------------------
-export function fetchAiGatewayStatus() {
-  return cpRequest('/ai/status');
-}
-
-export function prescreenArtisanDocument(payload, token) {
-  return cpRequest('/ai/artisan-doc/prescreen', {
-    method: 'POST',
-    token,
-    body: payload
-  });
-}
-
-export function draftArtisanListingCopilot(payload, token = null) {
-  return cpRequest('/ai/artisan-copilot/draft', {
-    method: 'POST',
-    token,
-    body: payload
-  });
-}
-
-export function auditCraftListingClaims(payload, token = null) {
-  return cpRequest('/ai/craft-audit/listing', {
-    method: 'POST',
-    token,
-    body: payload
-  });
-}
-
-export function askEvidenceLockedBuyerAssistant(payload) {
-  return cpRequest('/ai/buyer-assistant/ask', {
-    method: 'POST',
     body: payload
   });
 }

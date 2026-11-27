@@ -911,7 +911,6 @@ def admin_live_overview(
                 ),
                 "verification_path": app_row.verification_path,
                 "application_status": app_row.application_status,
-                "ai_prescreen": (app_row.submitted_metadata or {}).get("ai_prescreen"),
                 "seller_verification_status": (
                     sellers_by_id[app_row.seller_profile_id].verification_status
                     if app_row.seller_profile_id in sellers_by_id
