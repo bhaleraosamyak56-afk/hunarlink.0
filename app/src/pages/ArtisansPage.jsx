@@ -146,6 +146,8 @@ export default function ArtisansPage() {
                               ? `${artisan.name} at work`
                               : `${artisan.craft} by ${artisan.name}`
                           }
+                          width="480"
+                          height="300"
                           loading="lazy"
                           decoding="async"
                         />

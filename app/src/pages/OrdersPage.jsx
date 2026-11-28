@@ -95,6 +95,7 @@ export default function OrdersPage() {
               src={`${import.meta.env.BASE_URL}img/brand/logo.svg`}
               alt=""
               className="up-emblem-mark"
+              width="33"
               height="38"
             />
             <div>

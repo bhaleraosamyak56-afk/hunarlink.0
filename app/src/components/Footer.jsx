@@ -41,6 +41,7 @@ export default function Footer() {
                 src={`${import.meta.env.BASE_URL}img/brand/logo.svg`}
                 alt="HunarLink"
                 className="brand-mark brand-mark--footer"
+                width="40"
                 height="46"
                 loading="lazy"
               />

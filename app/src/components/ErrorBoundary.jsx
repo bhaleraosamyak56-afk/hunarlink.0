@@ -99,6 +99,7 @@ export default class ErrorBoundary extends React.Component {
           <img
             src={`${import.meta.env.BASE_URL}img/brand/logo.svg`}
             alt=""
+            width="48"
             height="56"
             style={{ width: 'auto', height: 56, marginBottom: 26 }}
           />

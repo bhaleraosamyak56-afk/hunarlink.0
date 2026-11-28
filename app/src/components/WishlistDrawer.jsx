@@ -62,7 +62,15 @@ export default function WishlistDrawer() {
                     }}
                     aria-label={`Open ${p.title}`}
                   >
-                    <img loading="lazy" decoding="async" className="wl-thumb" src={asset(p.image)} alt="" />
+                    <img
+                      loading="lazy"
+                      decoding="async"
+                      className="wl-thumb"
+                      width="72"
+                      height="88"
+                      src={asset(p.image)}
+                      alt=""
+                    />
                     <span className="wl-copy">
                       <span className="wl-guild">{p.guildLabel}</span>
                       <span className="wl-title">{p.title}</span>

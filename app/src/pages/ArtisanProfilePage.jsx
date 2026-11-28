@@ -742,6 +742,8 @@ export default function ArtisanProfilePage() {
                       <img
                         src={asset(other.image)}
                         alt={other.name}
+                        width="320"
+                        height="200"
                         loading="lazy"
                         decoding="async"
                       />

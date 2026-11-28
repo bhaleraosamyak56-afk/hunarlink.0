@@ -1,5 +1,5 @@
 import React, { Suspense, lazy, useCallback, useEffect, useState } from 'react';
-import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 import { useStore } from './state/StoreContext.jsx';
 import { useClerkBridge } from './data/clerkConfig.js';
 import UtilityBar from './components/UtilityBar.jsx';
@@ -114,6 +114,15 @@ export default function App() {
   const isRealAuthenticated = clerkAuth.enabled
     ? Boolean(clerkAuth.isSignedIn)
     : Boolean(user && user.authProvider === 'clerk' && user.isLoggedIn);
+  const isWaitingForClerk = isProtectedRoute && clerkAuth.enabled && !clerkAuth.isLoaded;
+  const shouldRedirectToLogin =
+    isProtectedRoute && (!clerkAuth.enabled || clerkAuth.isLoaded) && !isRealAuthenticated;
+
+  useEffect(() => {
+    if (!shouldRedirectToLogin) return;
+    const target = `${location.pathname}${location.search}`;
+    navigate(`/login?next=${encodeURIComponent(target)}`, { replace: true });
+  }, [shouldRedirectToLogin, location.pathname, location.search, navigate]);
 
   /* Redirect signed-out visitors to /login whenever they click a gated action
      (Add to Cart, Buy Now, Wishlist, Cart/Wishlist drawers, Checkout). */
@@ -130,39 +139,35 @@ export default function App() {
     }
   }, [authPrompt, clearAuthPrompt, isRealAuthenticated, location.pathname, location.search, navigate]);
 
-  if (isProtectedRoute) {
-    if (clerkAuth.enabled && !clerkAuth.isLoaded) {
-      return (
-        <main
-          style={{
-            minHeight: '100vh',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '14px',
-            background: '#faf7f1',
-            color: '#1f2b22',
-            fontFamily: 'system-ui, -apple-system, sans-serif'
-          }}
-          aria-busy="true"
-        >
-          <img
-            src={`${import.meta.env.BASE_URL}img/brand/logo.svg`}
-            alt="HunarLink"
-            height="46"
-          />
-          <p style={{ fontSize: '0.95rem', opacity: 0.78 }}>
-            Verifying your HunarLink session&hellip;
-          </p>
-        </main>
-      );
-    }
-
-    if (!isRealAuthenticated) {
-      const target = `${location.pathname}${location.search}`;
-      return <Navigate to={`/login?next=${encodeURIComponent(target)}`} replace />;
-    }
+  if (isWaitingForClerk || shouldRedirectToLogin) {
+    return (
+      <main
+        style={{
+          minHeight: '100vh',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '14px',
+          background: '#faf7f1',
+          color: '#1f2b22',
+          fontFamily: 'system-ui, -apple-system, sans-serif'
+        }}
+        aria-busy="true"
+      >
+        <img
+          src={`${import.meta.env.BASE_URL}img/brand/logo.svg`}
+          alt="HunarLink"
+          width="40"
+          height="46"
+        />
+        <p style={{ fontSize: '0.95rem', opacity: 0.78 }}>
+          {shouldRedirectToLogin
+            ? 'Redirecting to sign in\u2026'
+            : 'Verifying your HunarLink session\u2026'}
+        </p>
+      </main>
+    );
   }
 
   return (

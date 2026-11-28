@@ -122,7 +122,15 @@ export default function CartDrawer() {
                   onClick={() => goTo(p.id)}
                   aria-label={`Open ${p.title}`}
                 >
-                  <img loading="lazy" decoding="async" className="wl-thumb" src={asset(p.image)} alt="" />
+                  <img
+                    loading="lazy"
+                    decoding="async"
+                    className="wl-thumb"
+                    width="72"
+                    height="88"
+                    src={asset(p.image)}
+                    alt=""
+                  />
                   <span className="wl-copy">
                     <span className="wl-guild">{p.guildLabel}</span>
                     <span className="wl-title">{p.title}</span>
@@ -224,6 +232,8 @@ export default function CartDrawer() {
                         loading="lazy"
                         decoding="async"
                         className="wl-thumb bag-thumb-sm"
+                        width="52"
+                        height="63"
                         src={asset(p.image)}
                         alt=""
                       />

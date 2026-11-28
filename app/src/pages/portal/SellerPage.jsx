@@ -1260,8 +1260,8 @@ export default function SellerPage() {
                   </div>
 
                   <div className="field-group full" style={{ marginTop: '16px' }}>
-                    <label className="field-label">Product Photograph (Select Preset or Upload Custom Photo) *</label>
-                    <div className="image-preset-grid" id="np-image-presets">
+                    <span className="field-label" id="np-photo-label">Product Photograph (Select Preset or Upload Custom Photo) *</span>
+                    <div className="image-preset-grid" id="np-image-presets" aria-labelledby="np-photo-label">
                       {IMAGE_PRESETS.map((p) => (
                         <button
                           type="button"
@@ -1911,7 +1911,7 @@ export default function SellerPage() {
                 </div>
 
                 <div className="field-group full" style={{ marginTop: '12px' }}>
-                  <label className="field-label">Update Product Photograph</label>
+                  <span className="field-label" id="edit-photo-label">Update Product Photograph</span>
                   <div className="custom-photo-upload-row" style={{ marginTop: '2px' }}>
                     <img id="edit-photo-preview" className="upload-preview-thumb" src={resolveImg(editImage)} alt="Current product photo" />
                     <label className="btn-outline" style={{ cursor: 'pointer' }}>Change Photo

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   ClerkProvider,
@@ -162,6 +162,26 @@ function SsoCallbackRunner() {
   const navigate = useNavigate();
   const ranRef = useRef(false);
   const doneRef = useRef(false);
+  const mountedRef = useRef(false);
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
+
+  useLayoutEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const safeNavigate = useCallback((target) => {
+    if (mountedRef.current) {
+      navigateRef.current(target, { replace: true });
+    } else {
+      queueMicrotask(() => {
+        if (mountedRef.current) navigateRef.current(target, { replace: true });
+      });
+    }
+  }, []);
 
   useEffect(() => {
     const pendingRole = readPendingClerkRole();
@@ -183,16 +203,16 @@ function SsoCallbackRunner() {
       if (doneRef.current) return;
       doneRef.current = true;
       if (clerk?.user) {
-        navigate(dest, { replace: true });
+        safeNavigate(dest);
       } else {
         clearPendingClerkRole();
         clearPendingClerkAuthMode();
-        navigate(isSignInAttempt ? registerDest : fallbackAuthDest, { replace: true });
+        safeNavigate(isSignInAttempt ? registerDest : fallbackAuthDest);
       }
     }, 4500);
 
     return () => window.clearTimeout(safetyTimer);
-  }, [clerk, navigate]);
+  }, [clerk, safeNavigate]);
 
   useEffect(() => {
     if (!clerk || !clerk.loaded || ranRef.current) return;
@@ -217,7 +237,7 @@ function SsoCallbackRunner() {
     const go = (target) => {
       if (doneRef.current) return;
       doneRef.current = true;
-      navigate(target, { replace: true });
+      safeNavigate(target);
     };
 
     Promise.resolve()
@@ -264,7 +284,7 @@ function SsoCallbackRunner() {
         clearPendingClerkAuthMode();
         go(isSignInAttempt ? registerDest : fallbackAuthDest);
       });
-  }, [clerk, clerk?.loaded, navigate]);
+  }, [clerk, clerk?.loaded, safeNavigate]);
 
   return null;
 }
@@ -567,15 +587,30 @@ function ClerkBridgeInner({ children }) {
         );
 
         if (!dbIsArtisan) {
+          const sameAccount =
+            buyerProfile?.email &&
+            syncedMeta.email &&
+            buyerProfile.email.toLowerCase() === syncedMeta.email.toLowerCase();
+          const keptFirst = sameAccount ? buyerProfile?.firstName || syncedMeta.first : syncedMeta.first;
+          const keptLast = sameAccount ? buyerProfile?.lastName ?? syncedMeta.last : syncedMeta.last;
+          const keptFull =
+            sameAccount && buyerProfile?.fullName
+              ? buyerProfile.fullName
+              : [keptFirst, keptLast].filter(Boolean).join(' ') || syncedMeta.fullName;
+          const keptBadge =
+            sameAccount && buyerProfile?.badge
+              ? buyerProfile.badge
+              : syncedMeta.badge;
           setBuyerProfile({
-            ...(buyerProfile || {}),
-            firstName: syncedMeta.first,
-            lastName: syncedMeta.last,
-            fullName: syncedMeta.fullName,
+            ...(sameAccount ? buyerProfile : {}),
+            firstName: keptFirst,
+            lastName: keptLast,
+            fullName: keptFull,
             email: syncedMeta.email,
-            phone: syncedMeta.phone || buyerProfile?.phone || '',
-            avatarPhoto: clerkAccount.imageUrl || buyerProfile?.avatarPhoto || '',
-            badge: syncedMeta.badge,
+            phone: (sameAccount && buyerProfile?.phone) || res?.phone || syncedMeta.phone || '',
+            avatarPhoto:
+              (sameAccount && buyerProfile?.avatarPhoto) || clerkAccount.imageUrl || '',
+            badge: keptBadge,
             role: 'buyer',
             isLoggedIn: true
           });
@@ -753,15 +788,19 @@ function ClerkBridgeInner({ children }) {
     // Static preview fallback when backend is offline
     setUser(synced.payload, { silent: true });
     if (resolvedRole === 'buyer') {
+      const sameAccount =
+        buyerProfile?.email &&
+        synced.email &&
+        buyerProfile.email.toLowerCase() === synced.email.toLowerCase();
       setBuyerProfile({
-        ...(buyerProfile || {}),
-        firstName: synced.first,
-        lastName: synced.last,
-        fullName: synced.fullName,
+        ...(sameAccount ? buyerProfile : {}),
+        firstName: (sameAccount && buyerProfile?.firstName) || synced.first,
+        lastName: (sameAccount && buyerProfile?.lastName) ?? synced.last,
+        fullName: (sameAccount && buyerProfile?.fullName) || synced.fullName,
         email: synced.email,
-        phone: synced.phone || buyerProfile?.phone || '',
-        avatarPhoto: clerkUser.imageUrl || buyerProfile?.avatarPhoto || '',
-        badge: synced.badge,
+        phone: (sameAccount && buyerProfile?.phone) || synced.phone || '',
+        avatarPhoto: (sameAccount && buyerProfile?.avatarPhoto) || clerkUser.imageUrl || '',
+        badge: (sameAccount && buyerProfile?.badge) || synced.badge,
         role: 'buyer',
         isLoggedIn: true
       });
@@ -1681,22 +1720,40 @@ export default function ClerkBoundary({ children }) {
   const navigate = useNavigate();
   const base = import.meta.env.BASE_URL || '/';
   const cleanBase = base.replace(/\/$/, '');
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
+  const mountedRef = useRef(false);
 
-  const routerPush = useCallback(
-    (to) => {
-      const target = toRouterPath(to);
-      if (target) navigate(target);
-    },
-    [navigate]
-  );
+  useLayoutEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
-  const routerReplace = useCallback(
-    (to) => {
-      const target = toRouterPath(to);
-      if (target) navigate(target, { replace: true });
-    },
-    [navigate]
-  );
+  const routerPush = useCallback((to) => {
+    const target = toRouterPath(to);
+    if (!target) return;
+    if (mountedRef.current) {
+      navigateRef.current(target);
+    } else {
+      queueMicrotask(() => {
+        if (mountedRef.current) navigateRef.current(target);
+      });
+    }
+  }, []);
+
+  const routerReplace = useCallback((to) => {
+    const target = toRouterPath(to);
+    if (!target) return;
+    if (mountedRef.current) {
+      navigateRef.current(target, { replace: true });
+    } else {
+      queueMicrotask(() => {
+        if (mountedRef.current) navigateRef.current(target, { replace: true });
+      });
+    }
+  }, []);
 
   return (
     <ClerkProvider

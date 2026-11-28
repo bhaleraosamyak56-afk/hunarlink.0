@@ -410,6 +410,8 @@ export default function ProductPage() {
                       <img
                         loading="lazy"
                         decoding="async"
+                        width="52"
+                        height="52"
                         src={asset(avatarImg)}
                         alt={product.artisan}
                         className="pdp-artisan-avatar-img"
@@ -663,8 +665,8 @@ export default function ProductPage() {
                 ) : (
                   <>
                     <div className="pdp-review-field">
-                      <label>Your Rating</label>
-                      <div className="pdp-star-picker" role="radiogroup" aria-label="Select star rating">
+                      <span className="pdp-review-field-label" id="pdp-rating-label">Your Rating</span>
+                      <div className="pdp-star-picker" role="radiogroup" aria-labelledby="pdp-rating-label">
                         {[1, 2, 3, 4, 5].map((starVal) => (
                           <button
                             key={starVal}
