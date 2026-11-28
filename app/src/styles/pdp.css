@@ -844,6 +844,305 @@
       margin-top: 80px;
     }
 
+    /* Product Reviews & Collector Impressions Section */
+    .pdp-reviews-section {
+      margin: 28px 0 12px;
+    }
+
+    .pdp-reviews-card {
+      background: #FFFFFF;
+      border: 1px solid rgba(20, 56, 42, 0.16);
+      border-radius: 18px;
+      padding: clamp(18px, 2.4vw, 28px);
+      box-shadow: 0 10px 30px rgba(17, 42, 32, 0.05);
+    }
+
+    .pdp-reviews-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin-bottom: 18px;
+    }
+
+    .pdp-reviews-toggle-btn {
+      background: #14382A;
+      color: #FFFFFF;
+      border: 1px solid #14382A;
+      border-radius: 999px;
+      padding: 10px 20px;
+      font-size: 0.82rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 0.18s ease, transform 0.18s ease;
+    }
+
+    .pdp-reviews-toggle-btn:hover {
+      background: #1B4B39;
+      transform: translateY(-1px);
+    }
+
+    .pdp-reviews-toggle-btn.is-open {
+      background: #FAF7F2;
+      color: #14382A;
+    }
+
+    .pdp-reviews-summary {
+      display: grid;
+      grid-template-columns: minmax(190px, 240px) 1fr;
+      gap: 24px;
+      align-items: center;
+      padding: 16px 18px;
+      background: #FAF7F2;
+      border: 1px solid #ECE5D8;
+      border-radius: 14px;
+      margin-bottom: 20px;
+    }
+
+    .pdp-reviews-score {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .pdp-reviews-score-num {
+      font-family: var(--font-serif, Georgia, serif);
+      font-size: 2.35rem;
+      font-weight: 700;
+      line-height: 1;
+      color: #112A20;
+    }
+
+    .pdp-reviews-stars {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      color: #D49A2A;
+      font-size: 1rem;
+    }
+
+    .pdp-reviews-count-note {
+      font-size: 0.78rem;
+      color: #5D7065;
+      font-weight: 600;
+    }
+
+    .pdp-rating-bars {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .pdp-rating-bar-row {
+      display: grid;
+      grid-template-columns: 54px 1fr 44px;
+      align-items: center;
+      gap: 10px;
+      font-size: 0.76rem;
+      color: #4A5C52;
+      font-weight: 600;
+    }
+
+    .pdp-rating-bar-track {
+      height: 8px;
+      border-radius: 999px;
+      background: #E8E1D4;
+      overflow: hidden;
+    }
+
+    .pdp-rating-bar-fill {
+      height: 100%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, #C88B2B, #E0AF4B);
+      transition: width 0.25s ease;
+    }
+
+    .pdp-review-form {
+      background: #FAF8F3;
+      border: 1px solid #E2DCD0;
+      border-radius: 14px;
+      padding: 18px;
+      margin-bottom: 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .pdp-review-form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .pdp-review-field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .pdp-review-field label {
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+      color: #364B3F;
+    }
+
+    .pdp-review-input,
+    .pdp-review-textarea {
+      width: 100%;
+      border: 1px solid #D5DDD7;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 0.88rem;
+      font-family: inherit;
+      background: #FFFFFF;
+      color: #112A20;
+    }
+
+    .pdp-review-input:focus,
+    .pdp-review-textarea:focus {
+      outline: 2px solid rgba(20, 56, 42, 0.22);
+      border-color: #14382A;
+    }
+
+    .pdp-star-picker {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .pdp-star-btn {
+      border: 1px solid #DFD7C8;
+      background: #FFFFFF;
+      border-radius: 10px;
+      padding: 6px 11px;
+      font-size: 1.05rem;
+      line-height: 1;
+      color: #B9B2A3;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .pdp-star-btn.is-active {
+      color: #D49A2A;
+      border-color: rgba(212, 154, 42, 0.55);
+      background: #FFF9ED;
+    }
+
+    .pdp-star-label {
+      margin-left: 6px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: #364B3F;
+    }
+
+    .pdp-review-error {
+      background: #FEF2F2;
+      border: 1px solid #FECACA;
+      color: #991B1B;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 0.82rem;
+      font-weight: 600;
+    }
+
+    .pdp-review-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+      gap: 14px;
+    }
+
+    .pdp-review-item {
+      background: #FCFBF8;
+      border: 1px solid #ECE5D8;
+      border-radius: 14px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .pdp-review-item-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .pdp-review-author {
+      font-weight: 700;
+      font-size: 0.9rem;
+      color: #112A20;
+    }
+
+    .pdp-review-meta {
+      font-size: 0.75rem;
+      color: #64756A;
+    }
+
+    .pdp-review-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 9px;
+      border-radius: 999px;
+      font-size: 0.7rem;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .pdp-review-badge.is-verified {
+      background: #ECFDF3;
+      color: #166534;
+      border: 1px solid #BBF7D0;
+    }
+
+    .pdp-review-badge.is-archive {
+      background: #FEF9EC;
+      color: #854D0E;
+      border: 1px solid #FDE68A;
+    }
+
+    .pdp-review-badge.is-collector {
+      background: #F1F5F9;
+      color: #334155;
+      border: 1px solid #CBD5E1;
+    }
+
+    .pdp-review-title {
+      font-weight: 700;
+      font-size: 0.92rem;
+      color: #14382A;
+      margin: 0;
+    }
+
+    .pdp-review-body {
+      margin: 0;
+      font-size: 0.85rem;
+      line-height: 1.55;
+      color: #2E3D34;
+    }
+
+    .pdp-seller-reply {
+      margin-top: 6px;
+      padding: 10px 12px;
+      border-left: 3px solid #D49A2A;
+      background: #FAF5E8;
+      border-radius: 0 10px 10px 0;
+      font-size: 0.8rem;
+      color: #2E3D34;
+    }
+
+    @media (max-width: 720px) {
+      .pdp-reviews-summary,
+      .pdp-review-form-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
     @media (min-width: 1680px) {
 
       .pdp-showcase-container,

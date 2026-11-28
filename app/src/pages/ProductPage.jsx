@@ -1,8 +1,13 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import { useStore, mapDbListingToProduct } from '../state/StoreContext.jsx';
 import { useClerkBridge } from '../data/clerkConfig.js';
-import { fetchCatalogProductById } from '../services/apiClient.js';
+import {
+  canAttemptBackend,
+  createProductReview,
+  fetchCatalogProductById,
+  fetchProductReviews
+} from '../services/apiClient.js';
 import { formatINR, asset } from '../utils/legacy.js';
 import { srcSetFor } from '../data/imageVariants.js';
 import { artisanProfileHref, featuredPortraitFor } from '../utils/artisans.js';
@@ -52,15 +57,19 @@ export default function ProductPage() {
     artisans: dbArtisans,
     dbSyncStatus,
     isRealSignedIn,
+    buyerProfile,
+    reviews: storeReviews,
     productById,
     pushRecent,
     recentlyViewedItems,
     wishlist,
     toggleWishlist,
     addToCart,
+    addReview,
     openModal,
     openDrawer,
-    clearRecentlyViewed
+    clearRecentlyViewed,
+    toast
   } = useStore();
 
   const rawId = (params.get('id') || '').trim();
@@ -112,6 +121,43 @@ export default function ProductPage() {
 
   const product = rejectedByDb ? null : fetchedProduct || cachedProduct;
   const [craftPassport, setCraftPassport] = useState(null);
+  const [reviewsData, setReviewsData] = useState(null);
+  const [reviewsLoading, setReviewsLoading] = useState(false);
+  const [reviewFormOpen, setReviewFormOpen] = useState(false);
+  const [reviewRating, setReviewRating] = useState(5);
+  const [reviewTitle, setReviewTitle] = useState('');
+  const [reviewCity, setReviewCity] = useState(buyerProfile?.city || '');
+  const [reviewBody, setReviewBody] = useState('');
+  const [reviewError, setReviewError] = useState('');
+  const [submittingReview, setSubmittingReview] = useState(false);
+
+  const loadProductReviews = useCallback(async () => {
+    const ref = product?.listingId || product?.productId || product?.id;
+    if (!ref || !canAttemptBackend()) {
+      setReviewsData(null);
+      return;
+    }
+    setReviewsLoading(true);
+    try {
+      const token = clerkAuth.isSignedIn && clerkAuth.getToken ? await clerkAuth.getToken() : null;
+      const res = await fetchProductReviews(ref, token);
+      setReviewsData(res);
+    } catch {
+      setReviewsData(null);
+    } finally {
+      setReviewsLoading(false);
+    }
+  }, [product?.listingId, product?.productId, product?.id, clerkAuth]);
+
+  useEffect(() => {
+    loadProductReviews();
+  }, [loadProductReviews]);
+
+  useEffect(() => {
+    if (!reviewCity && buyerProfile?.city) {
+      setReviewCity(buyerProfile.city);
+    }
+  }, [buyerProfile?.city, reviewCity]);
 
   useEffect(() => {
     let active = true;
@@ -187,6 +233,89 @@ export default function ProductPage() {
   const wished = wishlist.includes(product.id);
   const retailPrice = product.originalPrice ?? product.mrp;
   const discountPct = Math.round(((retailPrice - product.price) / retailPrice) * 100);
+
+  const localStoreReviews = (storeReviews?.[product.id] || []).map((r, idx) => ({
+    id: r.id || `local-${idx}`,
+    author_name: r.author || 'Collector',
+    author_city: r.city || 'India',
+    rating: Number(r.stars || 5),
+    title: r.title || null,
+    review_body: r.text || '',
+    is_verified_purchase: false,
+    created_at: r.date || null,
+    source: 'local'
+  }));
+  const displayedReviews = reviewsData?.reviews || localStoreReviews;
+  const effectiveRating = Number(reviewsData?.average_rating ?? product.rating ?? 4.9);
+  const effectiveReviewCount = Number(
+    reviewsData?.total_reviews ?? Math.max(product.reviewCount || 0, displayedReviews.length)
+  );
+  const effectiveBreakdown = reviewsData?.rating_breakdown || [
+    { stars: 5, count: effectiveReviewCount, percentage: effectiveReviewCount ? 88 : 0 },
+    { stars: 4, count: 0, percentage: effectiveReviewCount ? 10 : 0 },
+    { stars: 3, count: 0, percentage: effectiveReviewCount ? 2 : 0 },
+    { stars: 2, count: 0, percentage: 0 },
+    { stars: 1, count: 0, percentage: 0 }
+  ];
+
+  const ratingLabelFor = (stars) => {
+    if (stars === 5) return 'Heirloom Masterpiece';
+    if (stars === 4) return 'Very Good Craftsmanship';
+    if (stars === 3) return 'Good';
+    if (stars === 2) return 'Fair';
+    return 'Needs Improvement';
+  };
+
+  async function handlePublishReview(e) {
+    e.preventDefault();
+    setReviewError('');
+    if (!isRealSignedIn || !clerkAuth.isSignedIn) {
+      navigate(`/login?redirect=${encodeURIComponent(`/product?id=${product.id}`)}`);
+      return;
+    }
+    const bodyText = reviewBody.trim();
+    if (bodyText.length < 5) {
+      setReviewError('Please write at least 5 characters sharing your feedback on this craft.');
+      return;
+    }
+    setSubmittingReview(true);
+    try {
+      if (canAttemptBackend() && clerkAuth.getToken) {
+        const token = await clerkAuth.getToken();
+        if (!token) {
+          throw new Error('Your session expired. Please sign in again to submit a review.');
+        }
+        const ref = product.listingId || product.productId || product.id;
+        await createProductReview(
+          ref,
+          {
+            rating: reviewRating,
+            title: reviewTitle.trim() || null,
+            review_body: bodyText,
+            author_city: reviewCity.trim() || null
+          },
+          token
+        );
+        await loadProductReviews();
+      } else {
+        addReview(product.id, {
+          stars: reviewRating,
+          title: reviewTitle.trim(),
+          city: reviewCity.trim() || 'India',
+          text: bodyText
+        });
+      }
+      setReviewTitle('');
+      setReviewBody('');
+      setReviewRating(5);
+      setReviewFormOpen(false);
+      toast('Thank you — your review is now published.', 'success');
+    } catch (err) {
+      setReviewError(err?.message || 'Could not publish your review. Please try again.');
+    } finally {
+      setSubmittingReview(false);
+    }
+  }
 
   const buyNow = () => {
     addToCart(product.id, 1);
@@ -461,6 +590,227 @@ export default function ProductPage() {
             </div>
           </section>
         )}
+
+        {/* Collector Reviews & Write a Review */}
+        <section className="pdp-reviews-section" id="pdp-reviews-section" aria-labelledby="pdp-reviews-heading">
+          <div className="pdp-reviews-card">
+            <div className="pdp-reviews-head">
+              <div>
+                <div className="pdp-section-kicker">COLLECTOR REVIEWS &amp; IMPRESSIONS</div>
+                <h2 className="pdp-section-h2" id="pdp-reviews-heading">
+                  Craft Ratings &amp; Previous Reviews
+                </h2>
+              </div>
+              <button
+                type="button"
+                id="btn-pdp-write-review"
+                className={`pdp-reviews-toggle-btn${reviewFormOpen ? ' is-open' : ''}`}
+                onClick={() => {
+                  setReviewError('');
+                  setReviewFormOpen((prev) => !prev);
+                }}
+              >
+                {reviewFormOpen ? 'Close Review Form' : 'Write a Review'}
+              </button>
+            </div>
+
+            <div className="pdp-reviews-summary">
+              <div className="pdp-reviews-score">
+                <div className="pdp-reviews-score-num">{effectiveRating.toFixed(1)}</div>
+                <div className="pdp-reviews-stars" aria-label={`${effectiveRating.toFixed(1)} out of 5 stars`}>
+                  {Array.from({ length: 5 }).map((_, idx) => (
+                    <span key={idx}>{idx < Math.round(effectiveRating) ? '★' : '☆'}</span>
+                  ))}
+                </div>
+                <div className="pdp-reviews-count-note">
+                  {effectiveReviewCount} verified {effectiveReviewCount === 1 ? 'rating' : 'ratings'}
+                </div>
+              </div>
+
+              <div className="pdp-rating-bars">
+                {effectiveBreakdown.map((row) => (
+                  <div className="pdp-rating-bar-row" key={row.stars}>
+                    <span>{row.stars} Stars</span>
+                    <div className="pdp-rating-bar-track" aria-hidden="true">
+                      <div className="pdp-rating-bar-fill" style={{ width: `${row.percentage}%` }} />
+                    </div>
+                    <span>{row.percentage}%</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {reviewFormOpen && (
+              <form className="pdp-review-form" onSubmit={handlePublishReview}>
+                {!isRealSignedIn || !clerkAuth.isSignedIn ? (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+                    <span style={{ fontSize: '0.86rem', color: '#2E3D34', fontWeight: 600 }}>
+                      Sign in with your HunarLink Collector account to publish a verified review for{' '}
+                      <strong>{product.title}</strong>.
+                    </span>
+                    <Link
+                      to={`/login?redirect=${encodeURIComponent(`/product?id=${product.id}`)}`}
+                      className="pdp-reviews-toggle-btn"
+                      style={{ textDecoration: 'none' }}
+                    >
+                      Sign In to Review &rarr;
+                    </Link>
+                  </div>
+                ) : (
+                  <>
+                    <div className="pdp-review-field">
+                      <label>Your Rating</label>
+                      <div className="pdp-star-picker" role="radiogroup" aria-label="Select star rating">
+                        {[1, 2, 3, 4, 5].map((starVal) => (
+                          <button
+                            key={starVal}
+                            type="button"
+                            className={`pdp-star-btn${reviewRating >= starVal ? ' is-active' : ''}`}
+                            aria-label={`${starVal} star${starVal > 1 ? 's' : ''}`}
+                            aria-pressed={reviewRating === starVal}
+                            onClick={() => setReviewRating(starVal)}
+                          >
+                            ★
+                          </button>
+                        ))}
+                        <span className="pdp-star-label">
+                          {reviewRating} / 5 &mdash; {ratingLabelFor(reviewRating)}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="pdp-review-form-grid">
+                      <div className="pdp-review-field">
+                        <label htmlFor="pdp-review-title-input">Review Headline (Optional)</label>
+                        <input
+                          id="pdp-review-title-input"
+                          type="text"
+                          className="pdp-review-input"
+                          maxLength={160}
+                          placeholder="e.g. Exquisite hand-knotted weave & richness"
+                          value={reviewTitle}
+                          onChange={(e) => setReviewTitle(e.target.value)}
+                        />
+                      </div>
+                      <div className="pdp-review-field">
+                        <label htmlFor="pdp-review-city-input">Your City (Optional)</label>
+                        <input
+                          id="pdp-review-city-input"
+                          type="text"
+                          className="pdp-review-input"
+                          maxLength={100}
+                          placeholder="e.g. New Delhi"
+                          value={reviewCity}
+                          onChange={(e) => setReviewCity(e.target.value)}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="pdp-review-field">
+                      <label htmlFor="pdp-review-body-input">Your Review *</label>
+                      <textarea
+                        id="pdp-review-body-input"
+                        rows={3}
+                        required
+                        minLength={5}
+                        maxLength={2000}
+                        className="pdp-review-textarea"
+                        placeholder={`Share your experience with ${product.artisan}'s ${product.title}...`}
+                        value={reviewBody}
+                        onChange={(e) => setReviewBody(e.target.value)}
+                      />
+                    </div>
+
+                    {reviewError && <div className="pdp-review-error">{reviewError}</div>}
+
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+                      <button
+                        type="button"
+                        className="pdp-clear-recent-btn"
+                        onClick={() => setReviewFormOpen(false)}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        className="pdp-reviews-toggle-btn"
+                        disabled={submittingReview}
+                      >
+                        {submittingReview ? 'Publishing Review…' : 'Publish Review'}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </form>
+            )}
+
+            {reviewsLoading && displayedReviews.length === 0 ? (
+              <p style={{ margin: 0, fontSize: '0.85rem', color: '#5D7065' }}>
+                Loading collector reviews&hellip;
+              </p>
+            ) : displayedReviews.length === 0 ? (
+              <div className="pdp-review-item" style={{ maxWidth: '100%' }}>
+                <p className="pdp-review-body" style={{ color: '#5D7065' }}>
+                  This craft holds an average rating of <strong>{effectiveRating.toFixed(1)} ★</strong>{' '}
+                  across {effectiveReviewCount} collector acquisitions. Be the first to write a detailed
+                  review above!
+                </p>
+              </div>
+            ) : (
+              <div className="pdp-review-list" id="pdp-review-list">
+                {displayedReviews.map((rev) => (
+                  <article className="pdp-review-item" key={rev.id}>
+                    <div className="pdp-review-item-top">
+                      <div>
+                        <div className="pdp-review-author">{rev.author_name}</div>
+                        <div className="pdp-review-meta">
+                          {rev.author_city || 'India'}
+                          {rev.created_at
+                            ? ` • ${new Date(rev.created_at).toLocaleDateString('en-IN', {
+                                day: 'numeric',
+                                month: 'short',
+                                year: 'numeric'
+                              })}`
+                            : ''}
+                        </div>
+                      </div>
+                      <span
+                        className={`pdp-review-badge ${
+                          rev.source === 'heritage_archive'
+                            ? 'is-archive'
+                            : rev.is_verified_purchase
+                            ? 'is-verified'
+                            : 'is-collector'
+                        }`}
+                      >
+                        {rev.source === 'heritage_archive'
+                          ? 'Heritage Archive'
+                          : rev.is_verified_purchase
+                          ? 'Verified Purchase'
+                          : 'Collector Review'}
+                      </span>
+                    </div>
+
+                    <div className="pdp-reviews-stars" aria-label={`${rev.rating} out of 5 stars`}>
+                      {Array.from({ length: 5 }).map((_, idx) => (
+                        <span key={idx}>{idx < rev.rating ? '★' : '☆'}</span>
+                      ))}
+                    </div>
+
+                    {rev.title && <h3 className="pdp-review-title">{rev.title}</h3>}
+                    <p className="pdp-review-body">{rev.review_body}</p>
+
+                    {rev.seller_reply && (
+                      <div className="pdp-seller-reply">
+                        <strong>Artisan Workshop Reply:</strong> {rev.seller_reply}
+                      </div>
+                    )}
+                  </article>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
 
         <section className="pdp-suggestions-section" id="pdp-suggestions-section">
           <div className="pdp-section-header-split">

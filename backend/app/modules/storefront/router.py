@@ -33,6 +33,7 @@ from app.models.core_models import (
     PlatformRole,
     Product,
     ProductImage,
+    ProductReview,
     ProductVariant,
     RetailOrder,
     RetailOrderItem,
@@ -42,6 +43,7 @@ from app.models.core_models import (
     SellerProfile,
     SellerVerificationApplication,
     User,
+    UserAddress,
     UserLoginLog,
     UserRoleAssignment,
 )
@@ -49,6 +51,7 @@ from app.models.guardrail_models import FileSecurityScan
 from app.modules.auth.deletion import execute_user_deletion
 from app.modules.auth.schemas import AdminDeleteUserRequest, DeleteAccountResponse
 from app.modules.guardrails import repository as guardrail_repo, service as guardrail_service
+from app.modules.guardrails.rules.input_validation import validate_safe_text
 from app.modules.guardrails.schemas import (
     GuardrailOutcome,
     GuardrailResponse,
@@ -59,7 +62,11 @@ from app.modules.storefront.schemas import (
     ArtisanReviewItem,
     ArtisanSummaryItem,
     CatalogProductItem,
+    CreateProductReviewRequest,
     CreateRetailOrderRequest,
+    ProductReviewItem,
+    ProductReviewsSummaryResponse,
+    RatingBreakdownItem,
     RetailOrderItemSummary,
     RetailOrderSummaryResponse,
     SellerStudioListingInput,
@@ -369,17 +376,8 @@ def get_active_catalog_product_by_query_id(
     return get_active_catalog_product(id, request, response, db)
 
 
-@router.get("/catalog/products/{identifier}", response_model=CatalogProductItem)
-def get_active_catalog_product(
-    identifier: str,
-    request: Request,
-    response: Response,
-    db: Session = Depends(get_db),
-) -> CatalogProductItem:
-    """Return a single active, approved product listing by its unique DB UUID (or slug)."""
-    _check_lookup_rate_limit(product_lookup_rate_limiter, request, response)
+def _resolve_active_catalog_row(db: Session, identifier: str):
     clean_id, is_uuid = _validate_identifier(identifier, label="product ID")
-
     stmt = (
         select(SellerProductListing, Product, Category, SellerProfile, User)
         .join(Product, Product.id == SellerProductListing.product_id)
@@ -412,8 +410,19 @@ def get_active_catalog_product(
     row = db.execute(stmt).first()
     if row is None or not _has_active_direct_seller_role(db, row[4].id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Craft listing not found.")
+    return row
 
-    listing, product, category, seller, artisan_user = row
+
+@router.get("/catalog/products/{identifier}", response_model=CatalogProductItem)
+def get_active_catalog_product(
+    identifier: str,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+) -> CatalogProductItem:
+    """Return a single active, approved product listing by its unique DB UUID (or slug)."""
+    _check_lookup_rate_limit(product_lookup_rate_limiter, request, response)
+    listing, product, category, seller, artisan_user = _resolve_active_catalog_row(db, identifier)
     images_map = _load_product_images_map(db, [product.id])
     portraits_map = _load_seller_portraits_map(db, [seller.id])
     meta_map = _load_seller_metadata_map(db, [seller.id])
@@ -426,6 +435,316 @@ def get_active_catalog_product(
         artisan_user,
         images=images_map.get(product.id),
         artisan_portrait_url=portraits_map.get(seller.id) or (meta_map.get(seller.id) or {}).get("portrait_url"),
+    )
+
+
+def _compute_product_reviews_summary(
+    db: Session,
+    *,
+    listing: SellerProductListing,
+    product: Product,
+    seller: SellerProfile,
+) -> ProductReviewsSummaryResponse:
+    ProductReview.__table__.create(bind=db.get_bind(), checkfirst=True)
+    db_rows = db.execute(
+        select(ProductReview, User)
+        .join(User, User.id == ProductReview.reviewer_user_id)
+        .where(
+            ProductReview.product_id == product.id,
+            ProductReview.moderation_status == "PUBLISHED",
+        )
+        .order_by(ProductReview.created_at.desc())
+    ).all()
+
+    reviewer_ids = list({u.id for _, u in db_rows})
+    city_by_user_id: dict[str, str] = {}
+    if reviewer_ids:
+        for addr in db.scalars(
+            select(UserAddress)
+            .where(UserAddress.user_id.in_(reviewer_ids), UserAddress.is_active == True)  # noqa: E712
+            .order_by(UserAddress.is_default.desc(), UserAddress.created_at.desc())
+        ).all():
+            if addr.user_id not in city_by_user_id and addr.city:
+                city_by_user_id[addr.user_id] = addr.city
+
+    items: list[ProductReviewItem] = []
+    for rev, reviewer in db_rows:
+        display_name = (
+            reviewer.display_name
+            or f"{reviewer.first_name} {reviewer.last_name or ''}".strip()
+            or "Verified Collector"
+        )
+        items.append(
+            ProductReviewItem(
+                id=rev.id,
+                product_id=rev.product_id,
+                author_name=display_name,
+                author_city=city_by_user_id.get(reviewer.id, "India"),
+                rating=int(rev.rating),
+                title=rev.title,
+                review_body=rev.review_body or "",
+                is_verified_purchase=bool(rev.is_verified_purchase),
+                seller_reply=rev.seller_reply,
+                seller_replied_at=rev.seller_replied_at,
+                created_at=rev.created_at,
+                source="database",
+            )
+        )
+
+    # Also surface historical collector reviews from artisan verification metadata
+    meta_map = _load_seller_metadata_map(db, [seller.id])
+    seller_meta = meta_map.get(seller.id) or {}
+    archived_reviews = (
+        seller_meta.get("reviews") if isinstance(seller_meta.get("reviews"), list) else []
+    )
+    for idx, raw_rev in enumerate(archived_reviews):
+        if not isinstance(raw_rev, dict) or not raw_rev.get("text"):
+            continue
+        items.append(
+            ProductReviewItem(
+                id=f"archive-{seller.id}-{idx}",
+                product_id=product.id,
+                author_name=str(raw_rev.get("author") or "Verified Collector"),
+                author_city=str(raw_rev.get("city") or "India"),
+                rating=max(1, min(5, int(raw_rev.get("stars") or 5))),
+                title=f"Collected from {seller.store_name}",
+                review_body=str(raw_rev.get("text")),
+                is_verified_purchase=True,
+                created_at=product.created_at,
+                source="heritage_archive",
+            )
+        )
+
+    attrs = product.attributes_json if isinstance(product.attributes_json, dict) else {}
+    baseline_count = int(
+        attrs["baseline_review_count"]
+        if "baseline_review_count" in attrs
+        else (attrs.get("review_count") or 0)
+    )
+    baseline_rating = float(
+        attrs["baseline_rating"]
+        if "baseline_rating" in attrs
+        else (attrs.get("rating") or 4.9)
+    )
+    db_count = len(db_rows)
+    total_reviews = max(baseline_count + db_count, len(items))
+
+    if total_reviews == 0:
+        avg_rating = float(attrs.get("rating") or 4.9)
+    elif baseline_count > 0 and db_count > 0:
+        weighted = (baseline_rating * baseline_count) + sum(int(r.rating) for r, _ in db_rows)
+        avg_rating = round(weighted / (baseline_count + db_count), 2)
+    elif db_count > 0:
+        avg_rating = round(sum(int(r.rating) for r, _ in db_rows) / db_count, 2)
+    else:
+        avg_rating = round(baseline_rating, 2)
+
+    star_counts = {s: 0 for s in (5, 4, 3, 2, 1)}
+    for item in items:
+        star_counts[max(1, min(5, int(item.rating)))] += 1
+
+    # Distribute unarchived historical baseline count smoothly around baseline_rating
+    missing_baseline = max(0, total_reviews - len(items))
+    if missing_baseline > 0:
+        five_share = int(round(missing_baseline * max(0.65, min(0.92, (avg_rating - 3.6) / 1.4))))
+        four_share = max(0, missing_baseline - five_share)
+        star_counts[5] += five_share
+        star_counts[4] += four_share
+
+    denom = max(total_reviews, 1)
+    breakdown = [
+        RatingBreakdownItem(
+            stars=s,
+            count=star_counts[s],
+            percentage=int(round((star_counts[s] * 100) / denom)) if total_reviews else 0,
+        )
+        for s in (5, 4, 3, 2, 1)
+    ]
+
+    verified_count = sum(1 for i in items if i.is_verified_purchase) + missing_baseline
+    return ProductReviewsSummaryResponse(
+        product_id=product.id,
+        listing_id=listing.id,
+        title=listing.listing_title or product.name,
+        average_rating=round(avg_rating, 2),
+        total_reviews=total_reviews,
+        verified_purchase_count=verified_count,
+        rating_breakdown=breakdown,
+        reviews=items,
+    )
+
+
+@router.get("/catalog/products/{identifier}/reviews", response_model=ProductReviewsSummaryResponse)
+def list_product_reviews(
+    identifier: str,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+) -> ProductReviewsSummaryResponse:
+    """Return published DB reviews + historical collector reviews for an active listing."""
+    _check_lookup_rate_limit(product_lookup_rate_limiter, request, response)
+    listing, product, _category, seller, _artisan_user = _resolve_active_catalog_row(db, identifier)
+    return _compute_product_reviews_summary(
+        db, listing=listing, product=product, seller=seller
+    )
+
+
+@router.post(
+    "/catalog/products/{identifier}/reviews",
+    response_model=ProductReviewItem,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_product_review(
+    identifier: str,
+    payload: CreateProductReviewRequest,
+    request: Request,
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> ProductReviewItem:
+    """Persist an authenticated buyer/collector review in `product_reviews` with ASIGS guardrails."""
+    listing, product, _category, seller, _artisan_user = _resolve_active_catalog_row(db, identifier)
+    ProductReview.__table__.create(bind=db.get_bind(), checkfirst=True)
+
+    clean_title = (payload.title or "").strip() or None
+    clean_body = payload.review_body.strip()
+    clean_city = (payload.author_city or "").strip() or None
+
+    issues = [
+        *validate_safe_text("title", clean_title, required=False, min_len=2, max_len=160),
+        *validate_safe_text("review_body", clean_body, required=True, min_len=5, max_len=2000),
+        *validate_safe_text("author_city", clean_city, required=False, min_len=2, max_len=100),
+    ]
+    blocks = [i for i in issues if i.severity == GuardrailOutcome.BLOCK]
+    if blocks:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=blocks[0].message,
+        )
+
+    reviewer = db.scalar(select(User).where(User.id == principal.user_id))
+    if reviewer is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Reviewer account not found.")
+
+    # Check if user has a confirmed/paid/COD retail order item for this product not yet reviewed
+    existing_reviewed_item_ids = set(
+        db.scalars(
+            select(ProductReview.retail_order_item_id).where(
+                ProductReview.reviewer_user_id == reviewer.id,
+                ProductReview.retail_order_item_id.is_not(None),
+            )
+        ).all()
+    )
+    purchased_items = list(
+        db.scalars(
+            select(RetailOrderItem)
+            .join(RetailOrder, RetailOrder.id == RetailOrderItem.retail_order_id)
+            .where(
+                RetailOrder.customer_user_id == reviewer.id,
+                RetailOrderItem.product_id == product.id,
+                or_(
+                    RetailOrder.payment_status.in_(["PAID", "COD_PENDING"]),
+                    RetailOrder.fulfilment_status.in_(
+                        ["CONFIRMED", "PROCESSING", "PARTIALLY_SHIPPED", "SHIPPED", "DELIVERED"]
+                    ),
+                ),
+            )
+            .order_by(RetailOrder.created_at.desc())
+        ).all()
+    )
+    matched_order_item = next(
+        (oi for oi in purchased_items if oi.id not in existing_reviewed_item_ids),
+        None,
+    )
+    is_verified_purchase = bool(purchased_items)
+
+    review = ProductReview(
+        id=new_uuid(),
+        product_id=product.id,
+        product_variant_id=listing.product_variant_id,
+        seller_profile_id=seller.id,
+        reviewer_user_id=reviewer.id,
+        retail_order_item_id=matched_order_item.id if matched_order_item else None,
+        rating=int(payload.rating),
+        title=clean_title,
+        review_body=clean_body,
+        is_verified_purchase=is_verified_purchase,
+        moderation_status="PUBLISHED",
+    )
+    db.add(review)
+    db.flush()
+
+    # Keep Product & SellerProfile aggregates in sync
+    attrs = dict(product.attributes_json) if isinstance(product.attributes_json, dict) else {}
+    attrs.setdefault("baseline_review_count", int(attrs.get("review_count") or 0))
+    attrs.setdefault("baseline_rating", float(attrs.get("rating") or 4.9))
+
+    db_ratings = list(
+        db.scalars(
+            select(ProductReview.rating).where(
+                ProductReview.product_id == product.id,
+                ProductReview.moderation_status == "PUBLISHED",
+            )
+        ).all()
+    )
+    b_cnt = int(attrs["baseline_review_count"])
+    b_rat = float(attrs["baseline_rating"])
+    total_cnt = b_cnt + len(db_ratings)
+    new_avg = round(((b_rat * b_cnt) + sum(int(r) for r in db_ratings)) / max(total_cnt, 1), 2)
+    attrs["review_count"] = total_cnt
+    attrs["rating"] = new_avg
+    product.attributes_json = attrs
+
+    seller.total_reviews = int(seller.total_reviews or 0) + 1
+    if seller.total_reviews > 0:
+        prev_sum = float(seller.average_rating or Decimal("4.90")) * max(seller.total_reviews - 1, 0)
+        seller.average_rating = Decimal(f"{(prev_sum + payload.rating) / seller.total_reviews:.2f}")
+
+    record_audit_log(
+        db,
+        actor_user_id=reviewer.id,
+        actor_role="CUSTOMER",
+        action="PRODUCT_REVIEW_PUBLISHED",
+        target_type="product_reviews",
+        target_id=review.id,
+        correlation_id=getattr(request.state, "correlation_id", "") or str(uuid.uuid4()),
+        new_values={
+            "product_id": product.id,
+            "rating": review.rating,
+            "is_verified_purchase": is_verified_purchase,
+        },
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+
+    db.commit()
+    db.refresh(review)
+
+    resolved_city = clean_city
+    if not resolved_city:
+        addr = db.scalar(
+            select(UserAddress)
+            .where(UserAddress.user_id == reviewer.id, UserAddress.is_active == True)  # noqa: E712
+            .order_by(UserAddress.is_default.desc(), UserAddress.created_at.desc())
+            .limit(1)
+        )
+        resolved_city = addr.city if addr and addr.city else "India"
+
+    display_name = (
+        reviewer.display_name
+        or f"{reviewer.first_name} {reviewer.last_name or ''}".strip()
+        or "Verified Collector"
+    )
+    return ProductReviewItem(
+        id=review.id,
+        product_id=review.product_id,
+        author_name=display_name,
+        author_city=resolved_city,
+        rating=review.rating,
+        title=review.title,
+        review_body=review.review_body or "",
+        is_verified_purchase=review.is_verified_purchase,
+        created_at=review.created_at,
+        source="database",
     )
 
 

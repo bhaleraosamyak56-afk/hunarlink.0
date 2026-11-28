@@ -228,6 +228,20 @@ export function fetchCatalogProductById(productOrListingId, token = null) {
   return apiRequest(`/api/v1/catalog/product?id=${encodeURIComponent(productOrListingId)}`, { token });
 }
 
+export function fetchProductReviews(productOrListingId, token = null) {
+  return apiRequest(
+    `/api/v1/catalog/products/${encodeURIComponent(productOrListingId)}/reviews`,
+    { token }
+  );
+}
+
+export function createProductReview(productOrListingId, payload, token) {
+  return apiRequest(
+    `/api/v1/catalog/products/${encodeURIComponent(productOrListingId)}/reviews`,
+    { method: 'POST', body: payload, token }
+  );
+}
+
 export function fetchArtisans(token = null) {
   return apiRequest('/api/v1/artisans', { token });
 }

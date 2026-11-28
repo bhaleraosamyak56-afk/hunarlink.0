@@ -493,3 +493,129 @@ def test_12_retail_order_razorpay_checkout_to_admin_refund_end_to_end(app_and_cl
 
     app.dependency_overrides.pop(get_razorpay_gateway, None)
 
+
+def test_13_product_reviews_persistence_verified_purchase_and_guardrails(app_and_client, db_session):
+    from sqlalchemy import select
+
+    from app.models.core_models import ProductReview, SellerVerificationApplication
+    from tests.conftest import create_user_with_roles
+
+    app, client = app_and_client
+    entities = seed_marketplace_entities(db_session)
+    listing = entities["active_listing"]
+    seller = entities["seller_profile"]
+
+    # Seed an archived collector quote in artisan verification metadata
+    ver_app = SellerVerificationApplication(
+        seller_profile_id=seller.id,
+        application_number="HL-VER-REV-TEST-01",
+        verification_path="GI",
+        application_status="APPROVED",
+        submitted_metadata={
+            "reviews": [
+                {
+                    "author": "Kavita Kapoor",
+                    "city": "Mumbai",
+                    "stars": 5,
+                    "text": "Authentic Kani border work — museum-grade Kashmiri pashmina.",
+                }
+            ]
+        },
+    )
+    db_session.add(ver_app)
+    db_session.commit()
+
+    # 1. Guest can view public reviews + archived quotes, but cannot post
+    set_authenticated_principal(app, None)
+    pub_resp = client.get(f"/api/v1/catalog/products/{listing.id}/reviews")
+    assert pub_resp.status_code == 200
+    pub_data = pub_resp.json()
+    assert pub_data["product_id"] == entities["product"].id
+    assert len(pub_data["reviews"]) == 1
+    assert pub_data["reviews"][0]["author_name"] == "Kavita Kapoor"
+    assert pub_data["reviews"][0]["source"] == "heritage_archive"
+
+    guest_post = client.post(
+        f"/api/v1/catalog/products/{listing.id}/reviews",
+        json={"rating": 5, "review_body": "Attempting unauthenticated review."},
+    )
+    assert guest_post.status_code == 401
+
+    # 2. Signed-in buyer blocked if content violates ASIGS vulgarity/script guardrails
+    set_authenticated_principal(app, entities["buyer_principal"])
+    bad_xss = client.post(
+        f"/api/v1/catalog/products/{listing.id}/reviews",
+        json={"rating": 4, "review_body": "<script>alert(1)</script> nice weave"},
+    )
+    assert bad_xss.status_code == 422
+
+    bad_vulgar = client.post(
+        f"/api/v1/catalog/products/{listing.id}/reviews",
+        json={"rating": 1, "review_body": "Total bullshit madarchod fake item"},
+    )
+    assert bad_vulgar.status_code == 422
+
+    # 3. Signed-in buyer with CONFIRMED/COD order gets automatic Verified Purchase badge
+    cod_order = client.post(
+        "/api/v1/orders/retail",
+        json={
+            "items": [{"seller_listing_id": listing.id, "quantity": 1}],
+            "shipping_address": {
+                "name": "Meera Sharma",
+                "phone": "+919876500112",
+                "locality": "Jor Bagh",
+                "city": "New Delhi",
+                "state": "Delhi",
+                "pincode": "110003",
+            },
+            "payment_method": "COD",
+        },
+    )
+    assert cod_order.status_code == 201
+
+    post_verified = client.post(
+        f"/api/v1/catalog/products/{listing.id}/reviews",
+        json={
+            "rating": 5,
+            "title": "Heirloom Kani border craftsmanship",
+            "review_body": "Soft handspun pashmina with crisp GI provenance tag.",
+            "author_city": "New Delhi",
+        },
+    )
+    assert post_verified.status_code == 201
+    created_rev = post_verified.json()
+    assert created_rev["is_verified_purchase"] is True
+    assert created_rev["rating"] == 5
+    assert created_rev["author_city"] == "New Delhi"
+
+    # 4. Separate buyer without order can still publish a Collector Review (is_verified_purchase=False)
+    _other_user, other_principal = create_user_with_roles(
+        db_session,
+        email="collector.no.order@example.com",
+        full_name="Rohan Verma",
+        roles=["CUSTOMER"],
+    )
+    set_authenticated_principal(app, other_principal)
+    post_collector = client.post(
+        f"/api/v1/catalog/products/{listing.id}/reviews",
+        json={
+            "rating": 4,
+            "title": "Saw it at gallery preview",
+            "review_body": "Beautiful natural walnut dye palette and fine finish.",
+            "author_city": "Bengaluru",
+        },
+    )
+    assert post_collector.status_code == 201
+    assert post_collector.json()["is_verified_purchase"] is False
+
+    # 5. GET reviews reflects both DB reviews newest-first + breakdown + persisted rows
+    summary_after = client.get(f"/api/v1/catalog/products/{listing.id}/reviews")
+    assert summary_after.status_code == 200
+    sdata = summary_after.json()
+    assert sdata["total_reviews"] >= 3
+    assert sdata["reviews"][0]["author_name"] == "Rohan Verma"
+    assert sdata["reviews"][1]["is_verified_purchase"] is True
+    db_count = len(db_session.scalars(select(ProductReview).where(ProductReview.product_id == entities["product"].id)).all())
+    assert db_count == 2
+
+

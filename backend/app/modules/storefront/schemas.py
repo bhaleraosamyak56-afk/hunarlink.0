@@ -170,3 +170,44 @@ class RetailOrderSummaryResponse(BaseModel):
     shipping_address: dict | None = None
     items: list[RetailOrderItemSummary] = Field(default_factory=list)
     created_at: datetime
+
+
+class CreateProductReviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    rating: int = Field(..., ge=1, le=5)
+    title: str | None = Field(default=None, max_length=160)
+    review_body: str = Field(..., min_length=5, max_length=2000)
+    author_city: str | None = Field(default=None, max_length=100)
+
+
+class ProductReviewItem(BaseModel):
+    id: str
+    product_id: str
+    author_name: str
+    author_city: str = "India"
+    rating: int
+    title: str | None = None
+    review_body: str
+    is_verified_purchase: bool = False
+    seller_reply: str | None = None
+    seller_replied_at: datetime | None = None
+    created_at: datetime | None = None
+    source: str = "database"
+
+
+class RatingBreakdownItem(BaseModel):
+    stars: int
+    count: int
+    percentage: int
+
+
+class ProductReviewsSummaryResponse(BaseModel):
+    product_id: str
+    listing_id: str
+    title: str
+    average_rating: float
+    total_reviews: int
+    verified_purchase_count: int = 0
+    rating_breakdown: list[RatingBreakdownItem] = Field(default_factory=list)
+    reviews: list[ProductReviewItem] = Field(default_factory=list)

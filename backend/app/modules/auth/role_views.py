@@ -7,7 +7,7 @@ import re
 
 from sqlalchemy import Engine, inspect, text
 
-from app.models.core_models import UserLoginLog
+from app.models.core_models import ProductReview, UserLoginLog
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 SQL_VIEWS_PATH = REPO_ROOT / "hunarlink-database" / "sql" / "15_role_registration_and_login_views.sql"
@@ -181,6 +181,7 @@ def ensure_login_tracking_and_views(engine: Engine) -> dict:
 
     table_existed = insp.has_table("user_login_logs")
     UserLoginLog.__table__.create(bind=engine, checkfirst=True)
+    ProductReview.__table__.create(bind=engine, checkfirst=True)
     table_created = not table_existed and inspect(engine).has_table("user_login_logs")
 
     views_applied: list[str] = []

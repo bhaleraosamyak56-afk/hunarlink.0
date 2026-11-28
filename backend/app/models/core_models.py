@@ -862,3 +862,25 @@ class AuditLog(Base):
     ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
     user_agent: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, nullable=False)
+
+
+class ProductReview(Base):
+    """Customer/collector product reviews matching `sql/07_payments_shipping_returns_reviews.sql`."""
+
+    __tablename__ = "product_reviews"
+
+    id: Mapped[str] = mapped_column(UUIDChar(), primary_key=True, default=new_uuid)
+    product_id: Mapped[str] = mapped_column(UUIDChar(), ForeignKey("products.id"), nullable=False)
+    product_variant_id: Mapped[str | None] = mapped_column(UUIDChar(), ForeignKey("product_variants.id"), nullable=True)
+    seller_profile_id: Mapped[str | None] = mapped_column(UUIDChar(), ForeignKey("seller_profiles.id"), nullable=True)
+    reviewer_user_id: Mapped[str] = mapped_column(UUIDChar(), ForeignKey("users.id"), nullable=False)
+    retail_order_item_id: Mapped[str | None] = mapped_column(UUIDChar(), ForeignKey("retail_order_items.id"), nullable=True)
+    rating: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    title: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    review_body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_verified_purchase: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    moderation_status: Mapped[str] = mapped_column(String(32), default="PUBLISHED", nullable=False)
+    seller_reply: Mapped[str | None] = mapped_column(Text, nullable=True)
+    seller_replied_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow, nullable=False)
