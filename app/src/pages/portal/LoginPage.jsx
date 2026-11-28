@@ -212,16 +212,19 @@ export default function LoginPage() {
     } catch (err) {
       if (err?.code === 'NOT_REGISTERED') {
         setEmailStep('input');
-        if (role === 'artisan') {
-          navigate('/auth?mode=register&not_registered=1', { replace: true });
-        } else {
-          setAuthMode('register');
-          setErrMsg(
-            err.message ||
-              'No registered HunarLink Buyer account was found for that email. Please register first below.'
-          );
-          navigate('/register?not_registered=1', { replace: true });
-        }
+        setAuthMode('register');
+        setErrMsg(
+          err.message ||
+            (role === 'artisan'
+              ? 'No registered HunarLink Artisan account was found for that email. Register with your email & password below.'
+              : 'No registered HunarLink Buyer account was found for that email. Register with your email & password below.')
+        );
+        navigate(
+          role === 'artisan'
+            ? '/register?role=artisan&not_registered=1'
+            : '/register?not_registered=1',
+          { replace: true }
+        );
       } else {
         setErrMsg(err?.message || 'Invalid email or password.');
       }
@@ -249,6 +252,10 @@ export default function LoginPage() {
         authMode === 'register' ? 'signup' : 'signin',
         authMode === 'register' ? password : ''
       );
+      if (res?.flow === 'complete') {
+        navigate(role === 'artisan' ? '/auth?tab=verify' : nextUrl || '/', { replace: true });
+        return;
+      }
       setPendingFlow(res.flow || (authMode === 'register' ? 'signUp' : 'signIn'));
       setEmailStep('verify');
     } catch (err) {
@@ -262,16 +269,19 @@ export default function LoginPage() {
         navigate(role === 'artisan' ? '/login?role=artisan' : '/login', { replace: true });
       } else if (err?.code === 'NOT_REGISTERED') {
         setEmailStep('input');
-        if (role === 'artisan') {
-          navigate('/auth?mode=register&not_registered=1', { replace: true });
-        } else {
-          setAuthMode('register');
-          setErrMsg(
-            err.message ||
-              'No registered HunarLink Buyer account was found for that email. Please register first below.'
-          );
-          navigate('/register?not_registered=1', { replace: true });
-        }
+        setAuthMode('register');
+        setErrMsg(
+          err.message ||
+            (role === 'artisan'
+              ? 'No registered HunarLink Artisan account was found for that email. Register with your email & password below.'
+              : 'No registered HunarLink Buyer account was found for that email. Register with your email & password below.')
+        );
+        navigate(
+          role === 'artisan'
+            ? '/register?role=artisan&not_registered=1'
+            : '/register?not_registered=1',
+          { replace: true }
+        );
       } else {
         setErrMsg(err?.message || 'Could not send email code. Try Sign in with Google.');
       }
@@ -728,9 +738,11 @@ export default function LoginPage() {
                           >
                             <IconShield size={15} />
                             {emailBusy
-                              ? 'Checking database & sending code…'
+                              ? authMode === 'register'
+                                ? 'Creating account & sending verification code…'
+                                : 'Checking database & sending code…'
                               : authMode === 'register'
-                                ? 'Send Registration Code'
+                                ? 'Register with Email & Password'
                                 : 'Send Sign-In Code'}
                           </button>
                           {authMode === 'signin' && (

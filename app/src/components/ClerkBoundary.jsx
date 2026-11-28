@@ -786,7 +786,11 @@ function ClerkBridgeInner({ children }) {
           if (trimmedPassword) {
             createParams.password = trimmedPassword;
           }
-          await signUp.create(createParams);
+          const su = await signUp.create(createParams);
+          if (su?.status === 'complete' && su?.createdSessionId) {
+            await clerk.setActive({ session: su.createdSessionId });
+            return { flow: 'complete' };
+          }
           await signUp.prepareEmailAddressVerification({ strategy: 'email_code' });
           return { flow: 'signUp' };
         } catch (err) {
@@ -832,7 +836,7 @@ function ClerkBridgeInner({ children }) {
         throw new Error(msg || 'Could not send sign-in verification code.');
       }
     },
-    [signIn, signInLoaded, signUp, signUpLoaded]
+    [clerk, signIn, signInLoaded, signUp, signUpLoaded]
   );
 
   const verifyEmailCode = useCallback(

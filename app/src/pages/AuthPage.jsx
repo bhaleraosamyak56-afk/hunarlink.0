@@ -77,6 +77,14 @@ export default function AuthPage() {
   const [busyProvider, setBusyProvider] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [signInMethod, setSignInMethod] = useState('password'); // 'password' | 'code'
+  const [code, setCode] = useState('');
+  const [emailStep, setEmailStep] = useState('input'); // 'input' | 'verify'
+  const [pendingFlow, setPendingFlow] = useState('signIn');
+  const [emailBusy, setEmailBusy] = useState(false);
+
   const clerkUser = clerk.clerkUser;
   const signedIn = Boolean(
     clerk.enabled && clerk.isSignedIn && clerkUser && storeUser && storeUser.isLoggedIn
@@ -85,15 +93,41 @@ export default function AuthPage() {
   useEffect(() => {
     if (params.get('role_conflict') === '1') {
       setAuthMode('signin');
+      setPendingFlow('signIn');
+      setEmailStep('input');
+      setCode('');
       setErrMsg(
         params.get('conflict_msg') ||
           'Role mismatch: this email is registered under a different role in HunarLink.'
       );
+    } else if (params.get('already_registered') === '1') {
+      setAuthMode('signin');
+      setPendingFlow('signIn');
+      setEmailStep('input');
+      setCode('');
+      setErrMsg(
+        'This account already exists in HunarLink. Switched to Sign In — enter your email & password below to continue.'
+      );
+    } else if (params.get('account_deleted') === '1') {
+      setAuthMode('register');
+      setPendingFlow('signUp');
+      setEmailStep('input');
+      setCode('');
+      setErrMsg(
+        'Your previous HunarLink Artisan account was permanently deleted. Register below with email & password to create a new account.'
+      );
     } else if (params.get('not_registered') === '1') {
       setAuthMode('register');
+      setPendingFlow('signUp');
+      setEmailStep('input');
+      setCode('');
       setErrMsg(
-        'No registered HunarLink Artisan account was found for that email. Please register as an Artisan below first.'
+        'No registered HunarLink Artisan account was found for that email. Register with your email & password below first.'
       );
+    } else if (params.get('mode') === 'register' || params.get('mode') === 'signup') {
+      setAuthMode('register');
+    } else if (params.get('mode') === 'signin') {
+      setAuthMode('signin');
     }
   }, [params]);
   const clerkEmail = clerkUser?.primaryEmailAddress?.emailAddress || '';
@@ -254,6 +288,117 @@ export default function AuthPage() {
     } catch (err) {
       setBusyProvider(null);
       setErrMsg(err?.message || 'Sign-in could not start.');
+    }
+  }
+
+  async function handlePasswordSignIn(e) {
+    e.preventDefault();
+    if (!clerk.signInWithPassword) {
+      setErrMsg('Clerk password authentication is unavailable.');
+      return;
+    }
+    setErrMsg('');
+    setEmailBusy(true);
+    try {
+      const res = await clerk.signInWithPassword(email, password, 'artisan');
+      if (res?.status === 'complete') {
+        navigate('/auth?tab=verify', { replace: true });
+        return;
+      }
+      if (res?.status === 'needs_email_code' || res?.status === 'needs_second_factor') {
+        setPendingFlow('signIn');
+        setEmailStep('verify');
+      }
+    } catch (err) {
+      if (err?.code === 'NOT_REGISTERED') {
+        setAuthMode('register');
+        setEmailStep('input');
+        setErrMsg(
+          err.message ||
+            'No registered HunarLink Artisan account was found for that email. Register with your email & password below.'
+        );
+      } else {
+        setErrMsg(err?.message || 'Invalid email or password.');
+      }
+    } finally {
+      setEmailBusy(false);
+    }
+  }
+
+  async function handleSendCode(e) {
+    e.preventDefault();
+    if (!clerk.sendEmailCode) {
+      setErrMsg('Clerk email authentication is unavailable.');
+      return;
+    }
+    if (authMode === 'register' && password.length < 15) {
+      setErrMsg('Password must be at least 15 characters long.');
+      return;
+    }
+    setErrMsg('');
+    setEmailBusy(true);
+    try {
+      const res = await clerk.sendEmailCode(
+        email,
+        'artisan',
+        authMode === 'register' ? 'signup' : 'signin',
+        authMode === 'register' ? password : ''
+      );
+      if (res?.flow === 'complete') {
+        navigate('/auth?tab=verify', { replace: true });
+        return;
+      }
+      setPendingFlow(res.flow || (authMode === 'register' ? 'signUp' : 'signIn'));
+      setEmailStep('verify');
+    } catch (err) {
+      if (err?.code === 'ALREADY_REGISTERED') {
+        setAuthMode('signin');
+        setEmailStep('input');
+        setErrMsg(
+          err.message ||
+            'This email already exists in HunarLink. Switched to Sign In — please sign in below.'
+        );
+      } else if (err?.code === 'NOT_REGISTERED') {
+        setAuthMode('register');
+        setEmailStep('input');
+        setErrMsg(
+          err.message ||
+            'No registered HunarLink Artisan account was found for that email. Register with your email & password below.'
+        );
+      } else {
+        setErrMsg(err?.message || 'Could not send email verification code.');
+      }
+    } finally {
+      setEmailBusy(false);
+    }
+  }
+
+  async function handleVerifyCode(e) {
+    e.preventDefault();
+    if (!clerk.verifyEmailCode) return;
+    if (pendingFlow === 'signUp' && password && password.length < 15) {
+      setErrMsg('Password must be at least 15 characters long.');
+      return;
+    }
+    setErrMsg('');
+    setEmailBusy(true);
+    try {
+      await clerk.verifyEmailCode(code, pendingFlow, password);
+      setEmailStep('input');
+      setCode('');
+      navigate('/auth?tab=verify', { replace: true });
+    } catch (err) {
+      if (err?.code === 'SWITCH_TO_SIGNIN') {
+        setAuthMode('signin');
+        setPendingFlow('signIn');
+        setEmailStep('input');
+        setCode('');
+        setErrMsg(err.message);
+      } else {
+        setErrMsg(err?.message || 'Invalid or expired verification code.');
+      }
+    } finally {
+      setEmailBusy(false);
     }
   }
 
@@ -500,8 +645,8 @@ export default function AuthPage() {
                   </h2>
                   <p className="login-sub">
                     {authMode === 'register'
-                      ? 'New artisans register below. Already registered in our DB? Switch to Sign In — existing accounts cannot re-register.'
-                      : 'Sign in with Google or Apple. Unverified artisans proceed straight to Verification.'}
+                      ? 'Register with email & password (or Google / Apple) below, then complete Workshop & GI verification.'
+                      : 'Sign in with your email & password (or Google / Apple). Unverified artisans proceed straight to Verification.'}
                   </p>
                 </div>
 
@@ -513,6 +658,8 @@ export default function AuthPage() {
                       className={`seg-btn${authMode === 'signin' ? ' is-on' : ''}`}
                       onClick={() => {
                         setAuthMode('signin');
+                        setEmailStep('input');
+                        setCode('');
                         setErrMsg('');
                       }}
                     >
@@ -523,6 +670,8 @@ export default function AuthPage() {
                       className={`seg-btn${authMode === 'register' ? ' is-on' : ''}`}
                       onClick={() => {
                         setAuthMode('register');
+                        setEmailStep('input');
+                        setCode('');
                         setErrMsg('');
                       }}
                     >
@@ -538,6 +687,208 @@ export default function AuthPage() {
                 )}
                 {clerk.enabled ? (
                   <div className="login-social-section">
+                    {emailStep === 'input' ? (
+                      authMode === 'signin' && signInMethod === 'password' ? (
+                        <form onSubmit={handlePasswordSignIn}>
+                          <div className="form-field">
+                            <label className="up-label" htmlFor="artisan-clerk-email-input">
+                              Email Address *
+                            </label>
+                            <input
+                              id="artisan-clerk-email-input"
+                              type="email"
+                              className="up-input"
+                              placeholder="artisan@example.com"
+                              required
+                              autoComplete="email"
+                              value={email}
+                              onChange={(e) => setEmail(e.target.value)}
+                            />
+                          </div>
+                          <div className="form-field">
+                            <label className="up-label" htmlFor="artisan-clerk-password-input">
+                              Password *
+                            </label>
+                            <input
+                              id="artisan-clerk-password-input"
+                              type="password"
+                              className="up-input"
+                              placeholder="Enter your password"
+                              required
+                              autoComplete="current-password"
+                              value={password}
+                              onChange={(e) => setPassword(e.target.value)}
+                            />
+                          </div>
+                          <button
+                            type="submit"
+                            className="btn-orange"
+                            style={{ width: '100%', justifyContent: 'center', marginTop: '0.25rem' }}
+                            disabled={emailBusy}
+                          >
+                            <IconShield size={15} />
+                            {emailBusy ? 'Signing in…' : 'Sign In with Email & Password'}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-orange-outline"
+                            style={{ width: '100%', justifyContent: 'center', marginTop: '0.5rem' }}
+                            onClick={() => {
+                              setSignInMethod('code');
+                              setErrMsg('');
+                            }}
+                          >
+                            Sign in with 6-digit email code instead
+                          </button>
+                        </form>
+                      ) : (
+                        <form onSubmit={handleSendCode}>
+                          <div className="form-field">
+                            <label className="up-label" htmlFor="artisan-clerk-email-input">
+                              Email Address *
+                            </label>
+                            <input
+                              id="artisan-clerk-email-input"
+                              type="email"
+                              className="up-input"
+                              placeholder="artisan@example.com"
+                              required
+                              autoComplete="email"
+                              value={email}
+                              onChange={(e) => setEmail(e.target.value)}
+                            />
+                          </div>
+                          {authMode === 'register' && (
+                            <div className="form-field">
+                              <label className="up-label" htmlFor="artisan-clerk-reg-password-input">
+                                Create Password (min. 15 characters) *
+                              </label>
+                              <input
+                                id="artisan-clerk-reg-password-input"
+                                type="password"
+                                className="up-input"
+                                placeholder="Create a strong password (15+ characters)"
+                                required
+                                minLength={15}
+                                autoComplete="new-password"
+                                value={password}
+                                onChange={(e) => setPassword(e.target.value)}
+                              />
+                              <div
+                                style={{
+                                  fontSize: '0.74rem',
+                                  marginTop: '0.28rem',
+                                  opacity: 0.78,
+                                  color:
+                                    password.length > 0 && password.length < 15
+                                      ? '#b33818'
+                                      : 'inherit'
+                                }}
+                              >
+                                {password.length > 0
+                                  ? `${password.length}/15+ characters`
+                                  : 'Minimum 15 characters required by security policy.'}
+                              </div>
+                            </div>
+                          )}
+                          <button
+                            type="submit"
+                            className="btn-orange"
+                            style={{ width: '100%', justifyContent: 'center', marginTop: '0.25rem' }}
+                            disabled={emailBusy}
+                          >
+                            <IconShield size={15} />
+                            {emailBusy
+                              ? authMode === 'register'
+                                ? 'Creating account & sending verification code…'
+                                : 'Checking database & sending code…'
+                              : authMode === 'register'
+                                ? 'Register with Email & Password'
+                                : 'Send Sign-In Code'}
+                          </button>
+                          {authMode === 'signin' && (
+                            <button
+                              type="button"
+                              className="btn-orange-outline"
+                              style={{ width: '100%', justifyContent: 'center', marginTop: '0.5rem' }}
+                              onClick={() => {
+                                setSignInMethod('password');
+                                setErrMsg('');
+                              }}
+                            >
+                              Sign in with Email &amp; Password instead
+                            </button>
+                          )}
+                        </form>
+                      )
+                    ) : (
+                      <form onSubmit={handleVerifyCode}>
+                        <div className="form-field">
+                          <label className="up-label" htmlFor="artisan-clerk-code-input">
+                            6-Digit Verification Code sent to {email} *
+                          </label>
+                          <input
+                            id="artisan-clerk-code-input"
+                            type="text"
+                            inputMode="numeric"
+                            className="up-input"
+                            placeholder="Enter 6-digit code"
+                            required
+                            autoComplete="one-time-code"
+                            value={code}
+                            onChange={(e) => setCode(e.target.value)}
+                          />
+                        </div>
+                        {pendingFlow === 'signUp' && password.length < 15 && (
+                          <div className="form-field">
+                            <label className="up-label" htmlFor="artisan-clerk-verify-password-input">
+                              Create Password (min. 15 characters) *
+                            </label>
+                            <input
+                              id="artisan-clerk-verify-password-input"
+                              type="password"
+                              className="up-input"
+                              placeholder="Create a strong password (15+ characters)"
+                              required
+                              minLength={15}
+                              autoComplete="new-password"
+                              value={password}
+                              onChange={(e) => setPassword(e.target.value)}
+                            />
+                          </div>
+                        )}
+                        <button
+                          type="submit"
+                          className="btn-orange"
+                          style={{ width: '100%', justifyContent: 'center' }}
+                          disabled={emailBusy}
+                        >
+                          <IconCheck size={15} />
+                          {emailBusy
+                            ? 'Verifying code…'
+                            : authMode === 'register'
+                              ? 'Verify Email & Continue to Workshop Setup'
+                              : 'Verify & Sign In'}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-orange-outline"
+                          style={{ width: '100%', justifyContent: 'center', marginTop: '0.5rem' }}
+                          onClick={() => {
+                            setEmailStep('input');
+                            setCode('');
+                            setErrMsg('');
+                          }}
+                        >
+                          Use a different email
+                        </button>
+                      </form>
+                    )}
+
+                    <div className="login-social-divider" aria-hidden="true">
+                      <span>or continue with</span>
+                    </div>
+
                     <div className="login-social-stack">
                       <button
                         type="button"
@@ -570,13 +921,6 @@ export default function AuthPage() {
                         </span>
                       </button>
                     </div>
-                    <p className="login-footer-note" style={{ marginTop: '0.85rem' }}>
-                      Prefer email code? Use{' '}
-                      <Link to={authMode === 'register' ? '/register?role=artisan' : '/login?role=artisan'}>
-                        Artisan Email {authMode === 'register' ? 'Registration' : 'Sign In'}
-                      </Link>
-                      .
-                    </p>
                   </div>
                 ) : (
                   <div className="login-error show" role="alert">
