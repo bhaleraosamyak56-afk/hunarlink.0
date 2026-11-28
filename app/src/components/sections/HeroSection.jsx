@@ -109,7 +109,7 @@ export default function HeroSection() {
               <span className="cr-sep" aria-hidden="true">
                 &#9670;
               </span>
-              <b>Escrow Protected</b>
+              <b>Razorpay Protected</b>
               <span className="cr-sep" aria-hidden="true">
                 &#9670;
               </span>
@@ -205,6 +205,8 @@ export default function HeroSection() {
                   <img
                     src={asset(`assets/${b.img}`)}
                     alt={b.alt}
+                    width={b.main ? '640' : '320'}
+                    height={b.main ? '300' : '210'}
                     loading={b.main ? undefined : 'lazy'}
                     decoding={b.main ? undefined : 'async'}
                     fetchPriority={b.main ? 'high' : undefined}

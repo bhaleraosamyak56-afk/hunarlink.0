@@ -623,6 +623,9 @@ def retrieve_private_document(
     principal: AuthenticatedPrincipal,
     scan_id: str,
     settings: Settings,
+    ip_address: str | None = None,
+    user_agent: str | None = None,
+    correlation_id: str | None = None,
 ) -> tuple[FileSecurityScan, Path]:
     scan_row = repository.get_file_scan(db, scan_id)
     if scan_row is None:
@@ -642,6 +645,23 @@ def retrieve_private_document(
     file_path = (resolved_root / scan_row.storage_key).resolve()
     if resolved_root not in file_path.parents or not file_path.is_file():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Stored file not found.")
+
+    record_audit_log(
+        db,
+        actor_user_id=principal.user_id,
+        actor_role="ADMIN" if principal.is_active_admin else "USER",
+        action="KYC_DOCUMENT_VIEWED",
+        target_type="file_security_scans",
+        target_id=scan_row.id,
+        correlation_id=correlation_id or str(uuid.uuid4()),
+        new_values={
+            "owner_scope": scan_row.owner_scope,
+            "uploader_user_id": scan_row.uploader_user_id,
+        },
+        ip_address=ip_address,
+        user_agent=user_agent,
+    )
+    db.commit()
     return scan_row, file_path
 
 

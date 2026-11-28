@@ -21,6 +21,7 @@ All tables use `ENGINE=InnoDB`, `DEFAULT CHARSET=utf8mb4`, `COLLATE=utf8mb4_0900
 | `avatar_storage_key` | `VARCHAR(512) NULL` |
 | `preferred_locale` | `VARCHAR(16) NOT NULL DEFAULT 'en-IN'` |
 | `preferred_currency` | `CHAR(3) NOT NULL DEFAULT 'INR'` |
+| `account_role` | `ENUM('BUYER', 'ARTISAN', 'ADMIN', 'WHOLESALE_BUYER', 'DEALER', 'SUPPLIER', 'DEACTIVATED') NOT NULL DEFAULT 'BUYER'` |
 | `account_status` | `ENUM('PENDING_VERIFICATION', 'ACTIVE', 'SUSPENDED', 'DEACTIVATED') NOT NULL DEFAULT 'ACTIVE'` |
 | `suspended_reason` | `VARCHAR(500) NULL` |
 | `last_login_at` | `DATETIME(6) NULL` |

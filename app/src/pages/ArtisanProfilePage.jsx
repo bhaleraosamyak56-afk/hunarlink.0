@@ -742,6 +742,8 @@ export default function ArtisanProfilePage() {
                       <img
                         src={asset(other.image)}
                         alt={other.name}
+                        width="320"
+                        height="200"
                         loading="lazy"
                         decoding="async"
                       />
@@ -901,7 +903,7 @@ export default function ArtisanProfilePage() {
                 </li>
                 <li>
                   <IconShield size={16} />
-                  <span>Escrow-protected checkout &amp; GI provenance tag</span>
+                  <span>Verified Razorpay checkout &amp; GI provenance tag</span>
                 </li>
                 <li>
                   <IconTruck size={16} />

@@ -58,6 +58,9 @@ class CraftPassport(Base):
     craft_days_estimated: Mapped[int | None] = mapped_column(Integer, nullable=True)
     artisan_story: Mapped[str | None] = mapped_column(Text, nullable=True)
     fair_craft_breakdown_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    serial_number: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    first_scanned_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    scan_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     is_public: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(

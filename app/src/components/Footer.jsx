@@ -41,6 +41,7 @@ export default function Footer() {
                 src={`${import.meta.env.BASE_URL}img/brand/logo.svg`}
                 alt="HunarLink"
                 className="brand-mark brand-mark--footer"
+                width="40"
                 height="46"
                 loading="lazy"
               />
@@ -177,7 +178,10 @@ export default function Footer() {
               GI Authenticity Charter
             </button>
             <button type="button" className="footer-link-btn" onClick={() => navigate('/orders')}>
-              Insured Transit &amp; Escrow Policy
+              Insured Transit &amp; Checkout Policy
+            </button>
+            <button type="button" className="footer-link-btn" onClick={() => navigate('/privacy')}>
+              Privacy &amp; DPDP Promise
             </button>
             <button
               type="button"

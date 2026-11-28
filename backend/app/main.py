@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -46,9 +47,20 @@ def create_app(settings_override: Settings | None = None) -> FastAPI:
     if settings_override is not None:
         application.dependency_overrides[get_settings] = lambda: settings_override
 
+    is_prod = settings.app_env.strip().lower() == "production"
+    allowed_hosts = list(settings.trusted_hosts_list or ["localhost", "127.0.0.1", "testserver"])
+    if not is_prod and "*.e2b.app" not in allowed_hosts:
+        allowed_hosts.append("*.e2b.app")
+    if "*" not in allowed_hosts:
+        application.add_middleware(
+            TrustedHostMiddleware,
+            allowed_hosts=allowed_hosts,
+        )
+
     application.add_middleware(
         CorrelationAndHeadersMiddleware,
         allow_dev_iframe=(settings.app_env == "development"),
+        is_production=is_prod,
     )
     application.add_middleware(
         CORSMiddleware,

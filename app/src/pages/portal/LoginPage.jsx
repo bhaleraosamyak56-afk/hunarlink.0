@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useStore } from '../../state/StoreContext.jsx';
 import {
   clearPendingClerkAuthMode,
@@ -17,6 +17,9 @@ import {
   IconUser
 } from '../../components/LineIcons.jsx';
 import { hdSrcFor, srcSetFor } from '../../data/imageVariants.js';
+import { sanitizeInternalRedirect } from '../../utils/safeRedirect.js';
+import { evaluatePassword } from '../../utils/passwordPolicy.js';
+import PasswordChecklist from '../../components/PasswordChecklist.jsx';
 import '../../styles/portal.css';
 
 function GoogleGlyph() {
@@ -40,37 +43,71 @@ function AppleGlyph() {
 
 export default function LoginPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [params] = useSearchParams();
   const { user, toast } = useStore();
   const clerk = useClerkBridge();
 
+  const isRegisterRoute = /^\/register(\.html)?$/i.test(location.pathname);
   const initialRole = params.get('role') === 'artisan' ? 'artisan' : 'user';
   const initialMode =
-    params.get('mode') === 'register' || params.get('mode') === 'signup'
+    isRegisterRoute ||
+    params.get('mode') === 'register' ||
+    params.get('mode') === 'signup'
       ? 'register'
       : 'signin';
   const alreadyRegisteredNotice = params.get('already_registered') === '1';
   const notRegisteredNotice = params.get('not_registered') === '1';
-  const nextUrl = params.get('next') || '/';
+  const accountDeletedNotice = params.get('account_deleted') === '1';
+  const roleConflictNotice = params.get('role_conflict') === '1';
+  const conflictMsg = params.get('conflict_msg') || '';
+  const nextUrl = sanitizeInternalRedirect(params.get('next') || params.get('redirect'), '/');
 
-  const [authMode, setAuthMode] = useState(notRegisteredNotice ? 'register' : initialMode); // 'signin' | 'register'
+  const [authMode, setAuthMode] = useState(
+    notRegisteredNotice || accountDeletedNotice ? 'register' : initialMode
+  ); // 'signin' | 'register'
   const [role, setRole] = useState(initialRole);
   const [errMsg, setErrMsg] = useState(
-    alreadyRegisteredNotice
-      ? 'This account already exists in HunarLink. You cannot register again — please Sign In below.'
-      : notRegisteredNotice
-        ? 'No registered HunarLink account was found for that email. Please register first below.'
-        : ''
+    roleConflictNotice
+      ? conflictMsg || 'This account is registered under a different role in HunarLink.'
+      : accountDeletedNotice
+        ? 'Your previous HunarLink account was permanently deleted. Register below if you want to create a brand-new account.'
+        : alreadyRegisteredNotice
+          ? 'This account already exists in HunarLink. You cannot register again — please Sign In below.'
+          : notRegisteredNotice
+            ? 'No registered HunarLink account was found for that email. Please register first below.'
+            : ''
   );
   const [busyProvider, setBusyProvider] = useState(null);
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [signInMethod, setSignInMethod] = useState('password'); // 'password' | 'code'
+  const [signInMethod, setSignInMethod] = useState('password'); // 'password' | 'code' | 'forgot'
+  const [forgotStep, setForgotStep] = useState('request'); // 'request' | 'reset'
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [code, setCode] = useState('');
   const [emailStep, setEmailStep] = useState('input'); // 'input' | 'verify'
   const [pendingFlow, setPendingFlow] = useState('signIn');
   const [emailBusy, setEmailBusy] = useState(false);
+  const [dpdpConsent, setDpdpConsent] = useState(false);
+  const [ageConfirmed, setAgeConfirmed] = useState(false);
+  const [marketingOptIn, setMarketingOptIn] = useState(false);
+
+  const persistPendingDpdp = () => {
+    try {
+      window.sessionStorage.setItem(
+        'hunarlink_pending_dpdp_consent',
+        JSON.stringify({
+          dpdpAccepted: Boolean(dpdpConsent),
+          age18: Boolean(ageConfirmed),
+          marketingOptIn: Boolean(marketingOptIn)
+        })
+      );
+    } catch {
+      /* ignore */
+    }
+  };
 
   const signedIn = clerk.enabled
     ? Boolean(clerk.isSignedIn && user && user.isLoggedIn)
@@ -81,13 +118,30 @@ export default function LoginPage() {
   const isVerifiedArtisan = Boolean(isArtisanSession && user?.artisanVerified);
 
   useEffect(() => {
-    if (params.get('already_registered') === '1') {
+    if (params.get('role_conflict') === '1') {
+      setAuthMode('signin');
+      setPendingFlow('signIn');
+      setEmailStep('input');
+      setCode('');
+      setErrMsg(
+        params.get('conflict_msg') ||
+          'Role mismatch: this email is registered under a different HunarLink role.'
+      );
+    } else if (params.get('already_registered') === '1') {
       setAuthMode('signin');
       setPendingFlow('signIn');
       setEmailStep('input');
       setCode('');
       setErrMsg(
         'This account already exists in HunarLink. Switched to Sign In — enter your email or use Google below to continue.'
+      );
+    } else if (params.get('account_deleted') === '1') {
+      setAuthMode('register');
+      setPendingFlow('signUp');
+      setEmailStep('input');
+      setCode('');
+      setErrMsg(
+        'Your previous HunarLink account was permanently deleted. Register below if you want to create a brand-new account.'
       );
     } else if (params.get('not_registered') === '1') {
       setAuthMode('register');
@@ -97,8 +151,16 @@ export default function LoginPage() {
       setErrMsg(
         'No registered HunarLink account was found for that email. Please register first below.'
       );
+    } else if (isRegisterRoute) {
+      setAuthMode('register');
+    } else if (params.get('mode') === 'register' || params.get('mode') === 'signup') {
+      setAuthMode('register');
+    } else if (params.get('mode') === 'signin') {
+      setAuthMode('signin');
+    } else {
+      setAuthMode('signin');
     }
-  }, [params]);
+  }, [isRegisterRoute, params]);
 
   useEffect(() => {
     if (signedIn && isArtisanSession && !isVerifiedArtisan) {
@@ -131,6 +193,15 @@ export default function LoginPage() {
     if (!clerk.enabled || !clerk.authenticateWithOAuth) {
       setErrMsg('Clerk authentication is required. Configure VITE_CLERK_PUBLISHABLE_KEY.');
       return;
+    }
+    if (authMode === 'register') {
+      if (!dpdpConsent || !ageConfirmed) {
+        setErrMsg(
+          'Please confirm the DPDP Data Privacy Notice and that you are 18 years or older before registering.'
+        );
+        return;
+      }
+      persistPendingDpdp();
     }
     setErrMsg('');
     setBusyProvider(provider);
@@ -174,16 +245,19 @@ export default function LoginPage() {
     } catch (err) {
       if (err?.code === 'NOT_REGISTERED') {
         setEmailStep('input');
-        if (role === 'artisan') {
-          navigate('/auth?mode=register&not_registered=1', { replace: true });
-        } else {
-          setAuthMode('register');
-          setErrMsg(
-            err.message ||
-              'No registered HunarLink Buyer account was found for that email. Please register first below.'
-          );
-          navigate('/login?mode=register&not_registered=1', { replace: true });
-        }
+        setAuthMode('register');
+        setErrMsg(
+          err.message ||
+            (role === 'artisan'
+              ? 'No registered HunarLink Artisan account was found for that email. Register with your email & password below.'
+              : 'No registered HunarLink Buyer account was found for that email. Register with your email & password below.')
+        );
+        navigate(
+          role === 'artisan'
+            ? '/register?role=artisan&not_registered=1'
+            : '/register?not_registered=1',
+          { replace: true }
+        );
       } else {
         setErrMsg(err?.message || 'Invalid email or password.');
       }
@@ -198,9 +272,19 @@ export default function LoginPage() {
       setErrMsg('Clerk email authentication is unavailable.');
       return;
     }
-    if (authMode === 'register' && password.length < 15) {
-      setErrMsg('Password must be at least 15 characters long.');
-      return;
+    if (authMode === 'register') {
+      if (!dpdpConsent || !ageConfirmed) {
+        setErrMsg(
+          'Please confirm the DPDP Data Privacy Notice and that you are 18 years or older before registering.'
+        );
+        return;
+      }
+      const pwCheck = evaluatePassword(password);
+      if (!pwCheck.isValid) {
+        setErrMsg(pwCheck.errorMessage);
+        return;
+      }
+      persistPendingDpdp();
     }
     setErrMsg('');
     setEmailBusy(true);
@@ -211,6 +295,10 @@ export default function LoginPage() {
         authMode === 'register' ? 'signup' : 'signin',
         authMode === 'register' ? password : ''
       );
+      if (res?.flow === 'complete') {
+        navigate(role === 'artisan' ? '/auth?tab=verify' : nextUrl || '/', { replace: true });
+        return;
+      }
       setPendingFlow(res.flow || (authMode === 'register' ? 'signUp' : 'signIn'));
       setEmailStep('verify');
     } catch (err) {
@@ -221,18 +309,22 @@ export default function LoginPage() {
           err.message ||
             'This email already exists in HunarLink. Switched to Sign In — please sign in below.'
         );
+        navigate(role === 'artisan' ? '/login?role=artisan' : '/login', { replace: true });
       } else if (err?.code === 'NOT_REGISTERED') {
         setEmailStep('input');
-        if (role === 'artisan') {
-          navigate('/auth?mode=register&not_registered=1', { replace: true });
-        } else {
-          setAuthMode('register');
-          setErrMsg(
-            err.message ||
-              'No registered HunarLink Buyer account was found for that email. Please register first below.'
-          );
-          navigate('/login?mode=register&not_registered=1', { replace: true });
-        }
+        setAuthMode('register');
+        setErrMsg(
+          err.message ||
+            (role === 'artisan'
+              ? 'No registered HunarLink Artisan account was found for that email. Register with your email & password below.'
+              : 'No registered HunarLink Buyer account was found for that email. Register with your email & password below.')
+        );
+        navigate(
+          role === 'artisan'
+            ? '/register?role=artisan&not_registered=1'
+            : '/register?not_registered=1',
+          { replace: true }
+        );
       } else {
         setErrMsg(err?.message || 'Could not send email code. Try Sign in with Google.');
       }
@@ -244,8 +336,8 @@ export default function LoginPage() {
   async function handleVerifyCode(e) {
     e.preventDefault();
     if (!clerk.verifyEmailCode) return;
-    if (pendingFlow === 'signUp' && password && password.length < 15) {
-      setErrMsg('Password must be at least 15 characters long.');
+    if (pendingFlow === 'signUp' && password && !evaluatePassword(password).isValid) {
+      setErrMsg(evaluatePassword(password).errorMessage);
       return;
     }
     setErrMsg('');
@@ -263,6 +355,87 @@ export default function LoginPage() {
       } else {
         setErrMsg(err?.message || 'Invalid or expired verification code.');
       }
+    } finally {
+      setEmailBusy(false);
+    }
+  }
+
+  async function handleSendPasswordResetCode(e) {
+    e.preventDefault();
+    if (!clerk.sendPasswordResetCode) {
+      setErrMsg('Clerk password reset is unavailable.');
+      return;
+    }
+    setErrMsg('');
+    setEmailBusy(true);
+    try {
+      await clerk.sendPasswordResetCode(email, role === 'artisan' ? 'artisan' : 'buyer');
+      setCode('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setForgotStep('reset');
+      toast('Password reset code sent to your email.', 'success');
+    } catch (err) {
+      if (err?.code === 'NOT_REGISTERED') {
+        setAuthMode('register');
+        setSignInMethod('password');
+        setForgotStep('request');
+        setErrMsg(
+          err.message ||
+            (role === 'artisan'
+              ? 'No registered HunarLink Artisan account was found for that email. Register below.'
+              : 'No registered HunarLink Buyer account was found for that email. Register below.')
+        );
+        navigate(
+          role === 'artisan'
+            ? '/register?role=artisan&not_registered=1'
+            : '/register?not_registered=1',
+          { replace: true }
+        );
+      } else {
+        setErrMsg(err?.message || 'Could not send password reset code.');
+      }
+    } finally {
+      setEmailBusy(false);
+    }
+  }
+
+  async function handleCompletePasswordReset(e) {
+    e.preventDefault();
+    if (!clerk.completePasswordReset) {
+      setErrMsg('Clerk password reset is unavailable.');
+      return;
+    }
+    const pwCheck = evaluatePassword(newPassword);
+    if (!pwCheck.isValid) {
+      setErrMsg(pwCheck.errorMessage);
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setErrMsg('New password and confirmation do not match.');
+      return;
+    }
+    setErrMsg('');
+    setEmailBusy(true);
+    try {
+      const res = await clerk.completePasswordReset(code, newPassword);
+      if (res?.status === 'needs_second_factor') {
+        setPendingFlow('signIn');
+        setSignInMethod('code');
+        setEmailStep('verify');
+        setCode('');
+        toast('Password updated! Enter the 2FA verification code sent to your email.', 'success');
+        return;
+      }
+      setForgotStep('request');
+      setSignInMethod('password');
+      setCode('');
+      setNewPassword('');
+      setConfirmPassword('');
+      toast('Password updated & signed in!', 'success');
+      navigate(role === 'artisan' ? '/auth?tab=verify' : nextUrl || '/', { replace: true });
+    } catch (err) {
+      setErrMsg(err?.message || 'Could not reset password.');
     } finally {
       setEmailBusy(false);
     }
@@ -379,7 +552,7 @@ export default function LoginPage() {
                 <>
                   <li><IconTruck size={14} /> Direct workshop listings stored in HunarLink MySQL / DB</li>
                   <li><IconBadgeCheck size={14} /> GI Registry &amp; Karigar verification workflow</li>
-                  <li><IconShield size={14} /> Escrow-protected Razorpay payouts</li>
+                  <li><IconShield size={14} /> Verified Razorpay Standard Checkout payouts</li>
                 </>
               ) : (
                 <>
@@ -464,9 +637,12 @@ export default function LoginPage() {
                       aria-pressed={authMode === 'signin'}
                       onClick={() => {
                         setAuthMode('signin');
+                        setSignInMethod('password');
+                        setForgotStep('request');
                         setEmailStep('input');
                         setCode('');
                         setErrMsg('');
+                        navigate(role === 'artisan' ? '/login?role=artisan' : '/login', { replace: true });
                       }}
                     >
                       Sign In
@@ -477,9 +653,12 @@ export default function LoginPage() {
                       aria-pressed={authMode === 'register'}
                       onClick={() => {
                         setAuthMode('register');
+                        setSignInMethod('password');
+                        setForgotStep('request');
                         setEmailStep('input');
                         setCode('');
                         setErrMsg('');
+                        navigate(role === 'artisan' ? '/register?role=artisan' : '/register', { replace: true });
                       }}
                     >
                       Register
@@ -498,6 +677,7 @@ export default function LoginPage() {
                       onClick={() => {
                         setRole('user');
                         setErrMsg('');
+                        navigate(authMode === 'register' ? '/register' : '/login', { replace: true });
                       }}
                     >
                       <IconUser size={14} />
@@ -511,6 +691,10 @@ export default function LoginPage() {
                       onClick={() => {
                         setRole('artisan');
                         setErrMsg('');
+                        navigate(
+                          authMode === 'register' ? '/register?role=artisan' : '/login?role=artisan',
+                          { replace: true }
+                        );
                       }}
                     >
                       <IconSpark size={14} />
@@ -527,6 +711,64 @@ export default function LoginPage() {
 
                 {clerk.enabled ? (
                   <div className="login-social-section">
+                    {authMode === 'register' && (
+                      <div
+                        style={{
+                          background: '#f7f5ee',
+                          border: '1px solid rgba(20,56,42,0.16)',
+                          borderRadius: '10px',
+                          padding: '12px 14px',
+                          marginBottom: '12px',
+                          fontSize: '0.8rem',
+                          lineHeight: 1.5
+                        }}
+                      >
+                        <div style={{ fontWeight: 700, color: '#14382a', marginBottom: 6 }}>
+                          DPDP Act 2023 Consent &amp; Age Confirmation
+                        </div>
+                        <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 6, cursor: 'pointer' }}>
+                          <input
+                            type="checkbox"
+                            id="reg-dpdp-consent"
+                            checked={dpdpConsent}
+                            onChange={(e) => setDpdpConsent(e.target.checked)}
+                            style={{ marginTop: 3 }}
+                          />
+                          <span>
+                            I agree to HunarLink&apos;s{' '}
+                            <Link to="/privacy" style={{ color: '#0B3A26', fontWeight: 700, textDecoration: 'underline' }}>
+                              DPDP Privacy Notice
+                            </Link>{' '}
+                            for essential account &amp; order processing. <span style={{ color: '#b33818' }}>*</span>
+                          </span>
+                        </label>
+                        <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 6, cursor: 'pointer' }}>
+                          <input
+                            type="checkbox"
+                            id="reg-age-18"
+                            checked={ageConfirmed}
+                            onChange={(e) => setAgeConfirmed(e.target.checked)}
+                            style={{ marginTop: 3 }}
+                          />
+                          <span>
+                            I confirm I am 18 years of age or older (DPDP Sec. 9). <span style={{ color: '#b33818' }}>*</span>
+                          </span>
+                        </label>
+                        <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', cursor: 'pointer', opacity: 0.9 }}>
+                          <input
+                            type="checkbox"
+                            id="reg-marketing-optin"
+                            checked={marketingOptIn}
+                            onChange={(e) => setMarketingOptIn(e.target.checked)}
+                            style={{ marginTop: 3 }}
+                          />
+                          <span>
+                            (Optional) Receive seasonal Valley Chronicle craft dispatches. You can withdraw anytime.
+                          </span>
+                        </label>
+                      </div>
+                    )}
+
                     <div className="login-social-stack">
                       <button
                         type="button"
@@ -564,14 +806,130 @@ export default function LoginPage() {
                       <span>
                         {authMode === 'register'
                           ? 'or register with email & password'
-                          : signInMethod === 'password'
-                            ? 'or sign in with email & password'
-                            : 'or sign in with email verification code'}
+                          : signInMethod === 'forgot'
+                            ? 'reset your password'
+                            : signInMethod === 'password'
+                              ? 'or sign in with email & password'
+                              : 'or sign in with email verification code'}
                       </span>
                     </div>
 
                     {emailStep === 'input' ? (
-                      authMode === 'signin' && signInMethod === 'password' ? (
+                      authMode === 'signin' && signInMethod === 'forgot' ? (
+                        forgotStep === 'request' ? (
+                          <form onSubmit={handleSendPasswordResetCode}>
+                            <div className="form-field">
+                              <label className="up-label" htmlFor="clerk-forgot-email-input">
+                                Account Email Address *
+                              </label>
+                              <input
+                                id="clerk-forgot-email-input"
+                                type="email"
+                                className="up-input"
+                                placeholder="name@example.com"
+                                required
+                                autoComplete="email"
+                                value={email}
+                                onChange={(e) => setEmail(e.target.value)}
+                              />
+                            </div>
+                            <button
+                              type="submit"
+                              className="btn-orange"
+                              style={{ width: '100%', justifyContent: 'center', marginTop: '0.25rem' }}
+                              disabled={emailBusy}
+                            >
+                              <IconShield size={15} />
+                              {emailBusy ? 'Sending reset code…' : 'Send Password Reset Code'}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn-orange-outline"
+                              style={{ width: '100%', justifyContent: 'center', marginTop: '0.5rem' }}
+                              onClick={() => {
+                                setSignInMethod('password');
+                                setForgotStep('request');
+                                setErrMsg('');
+                              }}
+                            >
+                              Back to Sign In
+                            </button>
+                          </form>
+                        ) : (
+                          <form onSubmit={handleCompletePasswordReset}>
+                            <div className="form-field">
+                              <label className="up-label" htmlFor="clerk-reset-code-input">
+                                6-Digit Reset Code sent to {email} *
+                              </label>
+                              <input
+                                id="clerk-reset-code-input"
+                                type="text"
+                                inputMode="numeric"
+                                className="up-input"
+                                placeholder="Enter 6-digit reset code"
+                                required
+                                autoComplete="one-time-code"
+                                value={code}
+                                onChange={(e) => setCode(e.target.value)}
+                              />
+                            </div>
+                            <div className="form-field">
+                              <label className="up-label" htmlFor="clerk-reset-new-password-input">
+                                New Password *
+                              </label>
+                              <input
+                                id="clerk-reset-new-password-input"
+                                type="password"
+                                className="up-input"
+                                placeholder="Create a strong password"
+                                required
+                                minLength={8}
+                                autoComplete="new-password"
+                                value={newPassword}
+                                onChange={(e) => setNewPassword(e.target.value)}
+                              />
+                              <PasswordChecklist password={newPassword} confirmPassword={confirmPassword} />
+                            </div>
+                            <div className="form-field">
+                              <label className="up-label" htmlFor="clerk-reset-confirm-password-input">
+                                Confirm New Password *
+                              </label>
+                              <input
+                                id="clerk-reset-confirm-password-input"
+                                type="password"
+                                className="up-input"
+                                placeholder="Re-enter your new password"
+                                required
+                                minLength={8}
+                                autoComplete="new-password"
+                                value={confirmPassword}
+                                onChange={(e) => setConfirmPassword(e.target.value)}
+                              />
+                            </div>
+                            <button
+                              type="submit"
+                              className="btn-orange"
+                              style={{ width: '100%', justifyContent: 'center', marginTop: '0.25rem' }}
+                              disabled={emailBusy}
+                            >
+                              <IconCheck size={15} />
+                              {emailBusy ? 'Updating password…' : 'Reset Password & Sign In'}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn-orange-outline"
+                              style={{ width: '100%', justifyContent: 'center', marginTop: '0.5rem' }}
+                              onClick={() => {
+                                setForgotStep('request');
+                                setCode('');
+                                setErrMsg('');
+                              }}
+                            >
+                              Resend code or change email
+                            </button>
+                          </form>
+                        )
+                      ) : authMode === 'signin' && signInMethod === 'password' ? (
                         <form onSubmit={handlePasswordSignIn}>
                           <div className="form-field">
                             <label className="up-label" htmlFor="clerk-email-input">
@@ -589,9 +947,32 @@ export default function LoginPage() {
                             />
                           </div>
                           <div className="form-field">
-                            <label className="up-label" htmlFor="clerk-password-input">
-                              Password *
-                            </label>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
+                              <label className="up-label" htmlFor="clerk-password-input" style={{ marginBottom: 0 }}>
+                                Password *
+                              </label>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSignInMethod('forgot');
+                                  setForgotStep('request');
+                                  setCode('');
+                                  setErrMsg('');
+                                }}
+                                style={{
+                                  border: 'none',
+                                  background: 'transparent',
+                                  color: '#c75b39',
+                                  fontSize: '0.78rem',
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                  padding: 0,
+                                  textDecoration: 'underline'
+                                }}
+                              >
+                                Forgot password?
+                              </button>
+                            </div>
                             <input
                               id="clerk-password-input"
                               type="password"
@@ -644,34 +1025,20 @@ export default function LoginPage() {
                           {authMode === 'register' && (
                             <div className="form-field">
                               <label className="up-label" htmlFor="clerk-reg-password-input">
-                                Create Password (min. 15 characters) *
+                                Create Password *
                               </label>
                               <input
                                 id="clerk-reg-password-input"
                                 type="password"
                                 className="up-input"
-                                placeholder="Create a strong password (15+ characters)"
+                                placeholder="Create a strong password"
                                 required
-                                minLength={15}
+                                minLength={8}
                                 autoComplete="new-password"
                                 value={password}
                                 onChange={(e) => setPassword(e.target.value)}
                               />
-                              <div
-                                style={{
-                                  fontSize: '0.74rem',
-                                  marginTop: '0.28rem',
-                                  opacity: 0.78,
-                                  color:
-                                    password.length > 0 && password.length < 15
-                                      ? '#b33818'
-                                      : 'inherit'
-                                }}
-                              >
-                                {password.length > 0
-                                  ? `${password.length}/15+ characters`
-                                  : 'Minimum 15 characters required by security policy.'}
-                              </div>
+                              <PasswordChecklist password={password} />
                             </div>
                           )}
                           <button
@@ -682,9 +1049,11 @@ export default function LoginPage() {
                           >
                             <IconShield size={15} />
                             {emailBusy
-                              ? 'Checking database & sending code…'
+                              ? authMode === 'register'
+                                ? 'Creating account & sending verification code…'
+                                : 'Checking database & sending code…'
                               : authMode === 'register'
-                                ? 'Send Registration Code'
+                                ? 'Register with Email & Password'
                                 : 'Send Sign-In Code'}
                           </button>
                           {authMode === 'signin' && (
@@ -720,22 +1089,23 @@ export default function LoginPage() {
                             onChange={(e) => setCode(e.target.value)}
                           />
                         </div>
-                        {pendingFlow === 'signUp' && password.length < 15 && (
+                        {pendingFlow === 'signUp' && !evaluatePassword(password).isValid && (
                           <div className="form-field">
                             <label className="up-label" htmlFor="clerk-verify-password-input">
-                              Create Password (min. 15 characters) *
+                              Create Password *
                             </label>
                             <input
                               id="clerk-verify-password-input"
                               type="password"
                               className="up-input"
-                              placeholder="Create a strong password (15+ characters)"
+                              placeholder="Create a strong password"
                               required
-                              minLength={15}
+                              minLength={8}
                               autoComplete="new-password"
                               value={password}
                               onChange={(e) => setPassword(e.target.value)}
                             />
+                            <PasswordChecklist password={password} />
                           </div>
                         )}
                         <button

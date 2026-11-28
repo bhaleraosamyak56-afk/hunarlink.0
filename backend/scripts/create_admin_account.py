@@ -121,11 +121,13 @@ def upsert_admin(db: Session, email: str, password: str, display_name: str, dial
             last_name=last_name,
             display_name=display_name.strip() or cleaned,
             preferred_currency="INR",
+            account_role="ADMIN",
             account_status="ACTIVE",
         )
         db.add(user)
         db.flush()
     else:
+        user.account_role = "ADMIN"
         user.account_status = "ACTIVE"
         if display_name.strip():
             user.display_name = display_name.strip()

@@ -67,7 +67,7 @@ def main() -> None:
             role_str = ", ".join(sorted(set(roles))) or "NO_ROLE"
             print(
                 f"  • {u.display_name or u.first_name} <{u.email}>\n"
-                f"      id={u.id} | clerk_id={u.clerk_user_id} | status={u.account_status}\n"
+                f"      id={u.id} | clerk_id={u.clerk_user_id} | account_role={u.account_role} | status={u.account_status}\n"
                 f"      roles=[{role_str}] | created={u.created_at}"
             )
 

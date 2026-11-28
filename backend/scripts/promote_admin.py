@@ -53,6 +53,8 @@ def promote_admin(email: str) -> None:
             print(f"ERROR: No user found with email '{cleaned}'. Sign in once via Clerk first.")
             sys.exit(1)
 
+        user.account_role = "ADMIN"
+
         # 1. Ensure ADMIN platform role assignment
         plat_role = db.scalar(select(PlatformRole).where(PlatformRole.code == "ADMIN"))
         if plat_role is None:

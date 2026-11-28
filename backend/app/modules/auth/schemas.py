@@ -27,20 +27,32 @@ class AuthSyncRequest(BaseModel):
     phone: str | None = Field(default=None, max_length=32)
     requested_role: Literal["buyer", "artisan"] = "buyer"
     auth_mode: Literal["signup", "signin", "sync"] = "sync"
+    dpdp_consent_accepted: bool | None = None
+    age_confirmed: bool | None = None
+    marketing_opt_in: bool | None = None
+    policy_version: str = Field(default="2026-11-v1", max_length=32)
 
 
 class AccountCheckRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     email: str = Field(..., min_length=3, max_length=255)
+    requested_role: Literal["buyer", "artisan"] | None = None
 
 
 class AccountCheckResponse(BaseModel):
     exists: bool
+    account_role: str | None = None
     roles: list[str] = Field(default_factory=list)
+    is_buyer: bool = False
     is_artisan: bool = False
+    is_admin: bool = False
     artisan_verified: bool = False
     artisan_verification_status: str | None = None
+    has_requested_role: bool | None = None
+    role_conflict: bool = False
+    conflict_message: str | None = None
+    last_login_at: datetime | None = None
 
 
 class SellerProfileBrief(BaseModel):
@@ -71,6 +83,7 @@ class AuthUserProfileResponse(BaseModel):
     last_name: str | None = None
     display_name: str | None = None
     phone: str | None = None
+    account_role: str = "BUYER"
     account_status: str
     roles: list[str]
     is_artisan: bool = False
@@ -78,8 +91,33 @@ class AuthUserProfileResponse(BaseModel):
     is_admin: bool = False
     admin_permissions: list[str] = Field(default_factory=list)
     seller_profile: SellerProfileBrief | None = None
+    last_login_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class DeleteAccountRequest(BaseModel):
+    """Self-service account deletion request after current-password / factor reverification."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    current_password: str | None = Field(default=None, max_length=256)
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class DeleteAccountResponse(BaseModel):
+    deleted: bool = True
+    anonymized: bool = True
+    purged: bool = False
+    clerk_deleted: bool = False
+    clerk_deleted_count: int = 0
+    message: str
+
+
+class AdminDeleteUserRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str | None = Field(default=None, max_length=500)
 
 
 class ArtisanVerificationSubmitRequest(BaseModel):
@@ -147,3 +185,38 @@ class AdminPasswordLoginResponse(BaseModel):
     email: str
     display_name: str
     admin_permissions: list[str] = Field(default_factory=list)
+
+
+ConsentScopeLiteral = Literal[
+    "essential_account",
+    "order_fulfilment",
+    "marketing_updates",
+    "analytics_telemetry",
+    "age_18_plus_confirmation",
+]
+
+
+class ConsentPreferenceIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    consent_scope: ConsentScopeLiteral
+    granted: bool
+    policy_version: str = Field(default="2026-11-v1", min_length=1, max_length=32)
+    source_surface: str | None = Field(default=None, max_length=64)
+
+
+class ConsentBatchUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    consents: list[ConsentPreferenceIn] = Field(..., min_length=1, max_length=10)
+
+
+class ConsentItemResponse(BaseModel):
+    consent_scope: str
+    policy_version: str
+    granted: bool
+    source_surface: str | None = None
+    granted_at: datetime | None = None
+    withdrawn_at: datetime | None = None
+    updated_at: datetime | None = None
+

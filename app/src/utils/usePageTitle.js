@@ -35,10 +35,13 @@ const TITLES = {
   '/seller.html': 'Artisan Portal',
   '/login': 'User Sign In',
   '/login.html': 'User Sign In',
+  '/register': 'Create HunarLink Account',
+  '/register.html': 'Create HunarLink Account',
   '/orders': 'My Orders',
   '/orders.html': 'My Orders',
   '/profile': 'My Profile',
-  '/profile.html': 'My Profile'
+  '/profile.html': 'My Profile',
+  '/privacy': 'Privacy & DPDP Promise'
 };
 
 export default function usePageTitle() {

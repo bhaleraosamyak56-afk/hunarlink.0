@@ -174,6 +174,7 @@ SELECT
   u.`id` AS `user_id`,
   u.`clerk_user_id`,
   u.`email`,
+  u.`account_role`,
   u.`account_status`,
   pr.`code` AS `role_code`,
   pr.`name` AS `role_name`,

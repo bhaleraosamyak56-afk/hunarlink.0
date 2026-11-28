@@ -38,6 +38,12 @@ def get_engine() -> Engine:
     global _engine, _session_factory
     if _engine is None:
         _engine = create_db_engine()
+        try:
+            from app.modules.auth.role_views import ensure_login_tracking_and_views
+
+            ensure_login_tracking_and_views(_engine)
+        except Exception:
+            pass
         _session_factory = sessionmaker(
             bind=_engine,
             autoflush=False,

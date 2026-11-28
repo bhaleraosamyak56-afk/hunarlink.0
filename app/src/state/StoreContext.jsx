@@ -554,17 +554,44 @@ export function StoreProvider({ children }) {
     loadPublicCatalog();
   }, [loadPublicCatalog]);
 
+  const clearSessionState = useCallback(() => {
+    dispatch({ type: 'db/reset' });
+    saveStorage(KEYS.cart, []);
+    saveStorage(KEYS.wishlist, []);
+    saveStorage(KEYS.savedLater, []);
+    saveStorage(KEYS.coupon, null);
+    saveStorage(KEYS.user, null);
+    saveStorage(KEYS.buyerProfile, null);
+    saveStorage(KEYS.platformUsers, []);
+    try {
+      window.localStorage.removeItem(KEYS.user);
+      window.localStorage.removeItem(KEYS.buyerProfile);
+      window.localStorage.removeItem('hunarlink_recently_viewed');
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   /* Hydrate catalogue, verified artisans, user orders & addresses strictly
      from FastAPI + MySQL/SQLite using the authenticated Clerk RS256 JWT. */
   const hydrateFromBackend = useCallback(async (token) => {
     if (!token) return;
     dispatch({ type: 'db/loading' });
+    const allowOffline = (err) => {
+      if (
+        err?.status === 401 ||
+        (err?.status === 403 && /not active|DEACTIVATED|SUSPENDED/i.test(err?.message || ''))
+      ) {
+        throw err;
+      }
+      return [];
+    };
     try {
       const [rawProducts, rawArtisans, rawOrders, rawAddresses] = await Promise.all([
         fetchCatalogProducts(null, token).catch(() => []),
         fetchArtisans(token).catch(() => []),
-        fetchMyRetailOrders(token).catch(() => []),
-        fetchMyAddresses(token).catch(() => [])
+        fetchMyRetailOrders(token).catch(allowOffline),
+        fetchMyAddresses(token).catch(allowOffline)
       ]);
       const mappedCatalogue = Array.isArray(rawProducts)
         ? rawProducts.map(mapDbListingToProduct)
@@ -585,20 +612,27 @@ export function StoreProvider({ children }) {
         addresses: mappedAddresses
       });
     } catch (err) {
+      if (
+        err?.status === 401 ||
+        (err?.status === 403 && /not active|DEACTIVATED|SUSPENDED/i.test(err?.message || ''))
+      ) {
+        clearSessionState();
+        return;
+      }
       dispatch({ type: 'db/error', error: err?.message || 'Could not load data from database.' });
     }
+  }, [clearSessionState]);
+
+  const setBuyerProfile = useCallback((profile) => {
+    dispatch({ type: 'buyerProfile/set', profile });
   }, []);
 
-  const clearSessionState = useCallback(() => {
-    dispatch({ type: 'db/reset' });
-    saveStorage(KEYS.cart, []);
-    saveStorage(KEYS.wishlist, []);
-    saveStorage(KEYS.savedLater, []);
-    saveStorage(KEYS.coupon, null);
-    saveStorage(KEYS.user, null);
-    saveStorage(KEYS.buyerProfile, null);
-    saveStorage(KEYS.platformUsers, []);
-  }, []);
+  const setUser = useCallback((user, opts = {}) => {
+    dispatch({ type: 'user/set', user });
+    if (!opts.silent) {
+      toast(user ? `Signed in as ${user.name || user.email}` : 'Signed out');
+    }
+  }, [toast]);
 
   useEffect(() => {
     if (!mounted.current) {
@@ -777,7 +811,7 @@ export function StoreProvider({ children }) {
         dispatch({ type: 'inquiries/add', inquiry });
       },
       replyToInquiry: (id, reply) => dispatch({ type: 'inquiries/reply', id, reply }),
-      setBuyerProfile: (profile) => dispatch({ type: 'buyerProfile/set', profile }),
+      setBuyerProfile,
       setPlatformUsers: () => dispatch({ type: 'platformUsers/set', users: [] }),
       setAdminToken: (token) => dispatch({ type: 'adminToken/set', token }),
 
@@ -833,12 +867,7 @@ export function StoreProvider({ children }) {
       resetFilters: () => dispatch({ type: 'ui/filtersReset' }),
       setLoadingProducts: (value) => dispatch({ type: 'ui/loading', value }),
 
-      setUser: (user, opts = {}) => {
-        dispatch({ type: 'user/set', user });
-        if (!opts.silent) {
-          toast(user ? `Signed in as ${user.name || user.email}` : 'Signed out');
-        }
-      },
+      setUser,
       pushRecent: (id) => dispatch({ type: 'recentlyViewed/push', id }),
       clearRecentlyViewed: () => dispatch({ type: 'recentlyViewed/clear' }),
 
@@ -870,7 +899,7 @@ export function StoreProvider({ children }) {
         return list;
       })()
     };
-  }, [state, catalogue, totals, toast, hydrateFromBackend, loadPublicCatalog, clearSessionState]);
+  }, [state, catalogue, totals, toast, hydrateFromBackend, loadPublicCatalog, clearSessionState, setBuyerProfile, setUser]);
 
   return <StoreCtx.Provider value={value}>{children}</StoreCtx.Provider>;
 }

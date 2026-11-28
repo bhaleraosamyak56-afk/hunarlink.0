@@ -67,9 +67,41 @@ OFF_TOPIC_REFUSAL = (
     "I am HunarSathi, the dedicated assistant for HunarLink. "
     "I can only help with questions about HunarLink's GI-certified Kashmiri crafts "
     "(Pashmina, Walnut Woodcarving, Papier-Mâché, Silk Rugs, Kani & Sozni), "
-    "prices, GI Tag verification, artisans, orders, escrow payments, wholesale, and delivery. "
+    "prices, GI Tag verification, artisans, orders, Razorpay & COD payments, wholesale, and delivery. "
     "How can I assist you with HunarLink today?"
 )
+
+MAX_USER_MESSAGE_CHARS = 1200
+
+_PROMPT_INJECTION_RE = re.compile(
+    r"(ignore\s+(?:all\s+)?(?:previous|prior|above)\s+instructions|"
+    r"disregard\s+(?:all\s+)?(?:previous|system)\s+(?:instructions|rules)|"
+    r"(?:reveal|show|print|repeat|leak)\s+(?:your\s+)?(?:system|developer)\s+(?:prompt|instruction|rules)|"
+    r"\bjailbreak\b|\bDAN\s+mode\b|developer\s+mode\s+enabled|"
+    r"bypass\s+(?:your\s+)?(?:safety|guardrails|rules)|"
+    r"<\|\s*system\s*\|>|^\s*#{2,}\s*system\b)",
+    re.IGNORECASE,
+)
+_PII_EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
+_PII_PHONE_RE = re.compile(r"(?<!\d)(?:\+91[\s\-]?)?[6-9]\d{4}[\s\-]?\d{5}(?!\d)")
+_PII_AADHAAR_RE = re.compile(r"(?<!\d)\d{4}[\s\-]?\d{4}[\s\-]?\d{4}(?!\d)")
+_PII_PAN_RE = re.compile(r"\b[A-Z]{5}\d{4}[A-Z]\b")
+_PII_CARD_RE = re.compile(r"(?<!\d)(?:\d[\s\-]?){13,19}(?!\d)")
+
+
+def scrub_pii_for_llm(text: str) -> str:
+    """Strip personal emails, phone numbers, Aadhaar, PAN, and card digits before external LLM calls."""
+    cleaned = _PII_EMAIL_RE.sub("[redacted-email]", text)
+    cleaned = _PII_CARD_RE.sub("[redacted-card]", cleaned)
+    cleaned = _PII_AADHAAR_RE.sub("[redacted-id]", cleaned)
+    cleaned = _PII_PHONE_RE.sub("[redacted-phone]", cleaned)
+    cleaned = _PII_PAN_RE.sub("[redacted-id]", cleaned)
+    return cleaned
+
+
+def is_prompt_injection(text: str) -> bool:
+    """Detect common system-prompt override / jailbreak attempts."""
+    return bool(_PROMPT_INJECTION_RE.search(text or ""))
 
 # Thread-safe state
 _LOCK = threading.Lock()
@@ -91,7 +123,7 @@ _HUNARLINK_DOMAIN_RE = re.compile(
     r"kashmir|j&k|srinagar|budgam|anantnag|kanihama|zadibal|ladakh|changthang|"
     r"gi\b|gi-jk|jk-wnt|tag|verify|verification|authentic|fake|purity|micron|passport|lab|"
     r"price|cost|mrp|discount|cheap|budget|expensive|₹|rs\b|inr|"
-    r"order|track|ship|deliver|courier|escrow|cod|pay|upi|cart|wishlist|compare|return|refund|"
+    r"order|track|ship|deliver|courier|razorpay|cod|pay|upi|cart|wishlist|compare|return|refund|"
     r"wholesale|b2b|bulk|moq|seller|vendor|register|portal|dashboard|profile|login|account|"
     r"care|wash|clean|store|gift|wedding|bridal|help|hi|hello|namaste|salam|thanks|thank you)",
     re.IGNORECASE,
@@ -327,10 +359,10 @@ def local_hunarlink_reply(user_message: str) -> str:
             "and **Local Sellers** (inquiries transfer to HunarLink Admin). Enjoy tiered discounts — **12% off (10+ units)**, "
             "**18% off (25+)**, and **25% off (50+)** — with batch GI export seals."
         )
-    if re.search(r"order|track|ship|deliver|escrow|cod|pay|upi|refund|return", q):
+    if re.search(r"order|track|ship|deliver|razorpay|cod|pay|upi|refund|return", q):
         return (
-            "HunarLink protects every purchase with **UPI Escrow, Card Escrow, and Insured Verify-on-Delivery (COD) Escrow** — "
-            "scan the physical GI QR seal at your doorstep before payment releases. Track all 5 stages "
+            "HunarLink protects every purchase with **Razorpay Standard Checkout (UPI, Cards & NetBanking) and Insured Verify-on-Delivery (COD)** — "
+            "scan the physical GI QR seal at your doorstep and verify authenticity before completing delivery. Track all 5 stages "
             "(Confirmed → GI Seal Verified → Packed at Loom → Insured Transit → Delivered) anytime on your **My Orders** page."
         )
     if re.search(r"care|wash|clean|store", q):
@@ -349,7 +381,7 @@ def local_hunarlink_reply(user_message: str) -> str:
         "• **Pashmina & Kani Shawls** (₹1,050–₹1,980)\n"
         "• **Papier-Mâché Art** (₹500–₹980)\n"
         "• **Walnut Woodcarving**, **Silk-on-Silk Rugs** & **Kani/Sozni Needlework**\n"
-        "Ask me about any craft, GI Tag verification, escrow payments, order tracking, or wholesale!"
+        "Ask me about any craft, GI Tag verification, Razorpay or COD payments, order tracking, or wholesale!"
     )
 
 
@@ -385,13 +417,26 @@ def stream_hunarsathi(
     Guaranteed to finish well under 30s via fast-path, cache, hard timeout, model failover & local fallback.
     """
     t_start = time.perf_counter()
-    cleaned = (user_message or "").strip()
+    raw_msg = (user_message or "").strip()[:MAX_USER_MESSAGE_CHARS]
 
-    if not cleaned:
+    if not raw_msg:
         reply = "Namaste! Ask me anything about HunarLink crafts, prices, GI verification, or your orders."
         yield {"type": "chunk", "text": reply}
         yield {"type": "done", "reply": reply, "model": "fast-path", "latency_ms": 1, "cached": True}
         return
+
+    if is_prompt_injection(raw_msg):
+        yield {"type": "chunk", "text": OFF_TOPIC_REFUSAL}
+        yield {
+            "type": "done",
+            "reply": OFF_TOPIC_REFUSAL,
+            "model": "guardrail-block",
+            "latency_ms": int((time.perf_counter() - t_start) * 1000),
+            "cached": True,
+        }
+        return
+
+    cleaned = scrub_pii_for_llm(raw_msg)
 
     # 1. Instant fast-path for greetings / thank-you (0ms, zero quota)
     fast_reply = _instant_fast_path(cleaned)

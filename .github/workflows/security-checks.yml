@@ -1,0 +1,50 @@
+name: HunarLink Security & Privacy Checks
+
+on:
+  push:
+    branches: [main, "arena/**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend-security-and-schema:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+      - name: Run FastAPI security, privacy & guardrail test suite
+        run: pytest backend/tests -v
+      - name: Validate MySQL 8.4 DDL & schema parity
+        run: python hunarlink-database/tools/validate_sql_static.py
+
+  frontend-build-and-static-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install frontend dependencies & build bundle
+        run: |
+          npm ci --prefix app
+          npm run build:root --prefix app
+      - name: Verify security invariants in frontend source
+        run: |
+          if grep -rnE "hl-card-num|hl-card-cvv|hl-card-exp|a\.password_hash|revealedHashes" app/src/; then
+            echo "Forbidden raw card input or password_hash reference detected in app/src!"
+            exit 1
+          fi
+          if grep -rn "startsWith('/')" app/src/components/ClerkBoundary.jsx; then
+            echo "Unsafe startsWith('/') redirect check detected in ClerkBoundary.jsx!"
+            exit 1
+          fi
+          if ! grep -q "Content-Security-Policy" app/index.html; then
+            echo "Missing Content-Security-Policy meta tag in app/index.html!"
+            exit 1
+          fi

@@ -272,12 +272,14 @@ def seed_artisans_and_catalog(*, session_override: Session | None = None) -> dic
                     last_name=last_name or None,
                     display_name=display_name,
                     preferred_currency="INR",
+                    account_role="ARTISAN",
                     account_status="ACTIVE",
                 )
                 db.add(user)
                 db.flush()
             else:
                 user.display_name = display_name
+                user.account_role = "ARTISAN"
                 user.account_status = "ACTIVE"
                 db.flush()
 

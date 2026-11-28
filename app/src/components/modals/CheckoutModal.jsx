@@ -233,8 +233,7 @@ export default function CheckoutModal() {
   const [vpaState, setVpaState] = useState({ status: 'idle', verifiedId: '', holder: '' });
   const [qrSeconds, setQrSeconds] = useState(300);
 
-  // Card & NetBanking preview form state
-  const [cardDraft, setCardDraft] = useState({ number: '', expiry: '', cvv: '', name: '' });
+  // NetBanking preview form state (Card PAN/CVV never collected in DOM — PCI-DSS SAQ-A)
   const [selectedBank, setSelectedBank] = useState('jkbank');
   const [otherBank, setOtherBank] = useState('');
 
@@ -348,14 +347,6 @@ export default function CheckoutModal() {
       });
       toast(`UPI ID ${clean} verified via NPCI BHIM`, 'success');
     }, 420);
-  };
-
-  const formatCardNumber = (val) =>
-    val.replace(/\D/g, '').slice(0, 16).replace(/(\d{4})(?=\d)/g, '$1 ');
-
-  const formatExpiry = (val) => {
-    const digits = val.replace(/\D/g, '').slice(0, 4);
-    return digits.length > 2 ? `${digits.slice(0, 2)} / ${digits.slice(2)}` : digits;
   };
 
   const pay = async (paymentMethod, bannerText = null) => {
@@ -534,9 +525,10 @@ export default function CheckoutModal() {
 
   const handleCardSubmit = (e) => {
     e.preventDefault();
-    const digits = cardDraft.number.replace(/\D/g, '');
-    const last4 = digits.length >= 4 ? digits.slice(-4) : '4242';
-    pay(`Card ending •••• ${last4} (Razorpay)`, `Authenticating 3D-Secure OTP for card •••• ${last4}…`);
+    pay(
+      'Credit / Debit Card (Razorpay Hosted Checkout)',
+      `Opening PCI-DSS Level 1 Razorpay Checkout for ${formatINR(totals.netPayable)}…`
+    );
   };
 
   const handleNetBankingSubmit = () => {
@@ -971,71 +963,38 @@ export default function CheckoutModal() {
               </div>
             )}
 
-            {/* ================= PANEL 2: CARDS ================= */}
+            {/* ================= PANEL 2: CARDS (PCI-DSS SAQ-A Hosted Checkout) ================= */}
             {payRail === 'card' && (
               <form className="hl-card-panel" onSubmit={handleCardSubmit}>
                 <div className="hl-pay-block-label">
-                  <span>Credit or Debit Card</span>
+                  <span>Credit or Debit Card (Hosted Razorpay Checkout)</span>
                   <span className="hl-card-networks">VISA &bull; MasterCard &bull; RuPay</span>
                 </div>
-                <div className="hl-card-grid">
-                  <div className="form-field full">
-                    <label htmlFor="hl-card-num">Card Number</label>
-                    <input
-                      id="hl-card-num"
-                      type="text"
-                      inputMode="numeric"
-                      placeholder="4532 1900 8421 4242"
-                      value={cardDraft.number}
-                      onChange={(e) =>
-                        setCardDraft((c) => ({ ...c, number: formatCardNumber(e.target.value) }))
-                      }
-                    />
-                  </div>
-                  <div className="form-field">
-                    <label htmlFor="hl-card-exp">Valid Thru (MM / YY)</label>
-                    <input
-                      id="hl-card-exp"
-                      type="text"
-                      inputMode="numeric"
-                      placeholder="09 / 29"
-                      value={cardDraft.expiry}
-                      onChange={(e) =>
-                        setCardDraft((c) => ({ ...c, expiry: formatExpiry(e.target.value) }))
-                      }
-                    />
-                  </div>
-                  <div className="form-field">
-                    <label htmlFor="hl-card-cvv">CVV</label>
-                    <input
-                      id="hl-card-cvv"
-                      type="password"
-                      inputMode="numeric"
-                      maxLength={4}
-                      placeholder="•••"
-                      value={cardDraft.cvv}
-                      onChange={(e) =>
-                        setCardDraft((c) => ({ ...c, cvv: e.target.value.replace(/\D/g, '').slice(0, 4) }))
-                      }
-                    />
-                  </div>
-                  <div className="form-field full">
-                    <label htmlFor="hl-card-name">Cardholder Name</label>
-                    <input
-                      id="hl-card-name"
-                      type="text"
-                      placeholder={buyer.name || 'Name as on card'}
-                      value={cardDraft.name}
-                      onChange={(e) => setCardDraft((c) => ({ ...c, name: e.target.value }))}
-                    />
-                  </div>
+                <div
+                  style={{
+                    background: '#f7f5ee',
+                    border: '1px solid rgba(20,56,42,0.16)',
+                    borderRadius: 10,
+                    padding: '14px 16px',
+                    marginBottom: 14,
+                    fontSize: '0.84rem',
+                    lineHeight: 1.55,
+                    color: '#203128'
+                  }}
+                >
+                  <strong>PCI-DSS Security Guarantee:</strong> HunarLink never collects, views, or stores
+                  card numbers or CVV codes in our browser forms. When you click below, card details are
+                  entered exclusively inside <strong>Razorpay&apos;s encrypted Checkout window</strong> (or
+                  confirmed cleanly in Sandbox Demo mode when previewing without live keys).
                 </div>
                 <button
                   type="submit"
                   className="btn-primary-forest hl-pay-cta"
                   disabled={!!method}
                 >
-                  {method ? 'Processing Card…' : `Pay ${formatINR(totals.netPayable)} Securely`}
+                  {method
+                    ? 'Launching Hosted Card Checkout…'
+                    : `Continue to Razorpay Card Checkout (${formatINR(totals.netPayable)})`}
                 </button>
               </form>
             )}

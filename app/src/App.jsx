@@ -1,5 +1,5 @@
 import React, { Suspense, lazy, useCallback, useEffect, useState } from 'react';
-import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 import { useStore } from './state/StoreContext.jsx';
 import { useClerkBridge } from './data/clerkConfig.js';
 import UtilityBar from './components/UtilityBar.jsx';
@@ -10,6 +10,7 @@ import WishlistDrawer from './components/WishlistDrawer.jsx';
 import CompareBar from './components/CompareBar.jsx';
 import Toasts from './components/Toasts.jsx';
 import ChatWidget from './components/ChatWidget.jsx';
+import CookieConsentBanner from './components/CookieConsentBanner.jsx';
 import AmbientField from './components/AmbientField.jsx';
 import ErrorBoundary from './components/ErrorBoundary.jsx';
 import ScrollToTop from './components/ScrollToTop.jsx';
@@ -47,6 +48,7 @@ const ProfilePage = lazy(() => import('./pages/ProfilePage.jsx'));
 const ArtisansPage = lazy(() => import('./pages/ArtisansPage.jsx'));
 const ArtisanProfilePage = lazy(() => import('./pages/ArtisanProfilePage.jsx'));
 const SsoCallbackPage = lazy(() => import('./pages/SsoCallbackPage.jsx'));
+const PrivacyPromisePage = lazy(() => import('./pages/PrivacyPromisePage.jsx'));
 import NotFound from './pages/NotFound.jsx';
 import SpaRedirect from './pages/SpaRedirect.jsx';
 import usePageTitle from './utils/usePageTitle.js';
@@ -101,7 +103,7 @@ export default function App() {
      or utility strip), so the storefront chrome must not render there either —
      otherwise the page starts ~77px low and every element below shifts. */
   const isPortal =
-    /^\/(profile|orders|login|wholesale|admin|seller)(\.html)?$/.test(location.pathname);
+    /^\/(profile|orders|login|register|wholesale|admin|seller)(\.html)?$/.test(location.pathname);
 
   /* Public browsing: visitors can freely explore the storefront (/), categories,
      product pages, and artisan profiles (/artisans, /artisans/:slug).
@@ -112,6 +114,15 @@ export default function App() {
   const isRealAuthenticated = clerkAuth.enabled
     ? Boolean(clerkAuth.isSignedIn)
     : Boolean(user && user.authProvider === 'clerk' && user.isLoggedIn);
+  const isWaitingForClerk = isProtectedRoute && clerkAuth.enabled && !clerkAuth.isLoaded;
+  const shouldRedirectToLogin =
+    isProtectedRoute && (!clerkAuth.enabled || clerkAuth.isLoaded) && !isRealAuthenticated;
+
+  useEffect(() => {
+    if (!shouldRedirectToLogin) return;
+    const target = `${location.pathname}${location.search}`;
+    navigate(`/login?next=${encodeURIComponent(target)}`, { replace: true });
+  }, [shouldRedirectToLogin, location.pathname, location.search, navigate]);
 
   /* Redirect signed-out visitors to /login whenever they click a gated action
      (Add to Cart, Buy Now, Wishlist, Cart/Wishlist drawers, Checkout). */
@@ -128,39 +139,35 @@ export default function App() {
     }
   }, [authPrompt, clearAuthPrompt, isRealAuthenticated, location.pathname, location.search, navigate]);
 
-  if (isProtectedRoute) {
-    if (clerkAuth.enabled && !clerkAuth.isLoaded) {
-      return (
-        <main
-          style={{
-            minHeight: '100vh',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '14px',
-            background: '#faf7f1',
-            color: '#1f2b22',
-            fontFamily: 'system-ui, -apple-system, sans-serif'
-          }}
-          aria-busy="true"
-        >
-          <img
-            src={`${import.meta.env.BASE_URL}img/brand/logo.svg`}
-            alt="HunarLink"
-            height="46"
-          />
-          <p style={{ fontSize: '0.95rem', opacity: 0.78 }}>
-            Verifying your HunarLink session&hellip;
-          </p>
-        </main>
-      );
-    }
-
-    if (!isRealAuthenticated) {
-      const target = `${location.pathname}${location.search}`;
-      return <Navigate to={`/login?next=${encodeURIComponent(target)}`} replace />;
-    }
+  if (isWaitingForClerk || shouldRedirectToLogin) {
+    return (
+      <main
+        style={{
+          minHeight: '100vh',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '14px',
+          background: '#faf7f1',
+          color: '#1f2b22',
+          fontFamily: 'system-ui, -apple-system, sans-serif'
+        }}
+        aria-busy="true"
+      >
+        <img
+          src={`${import.meta.env.BASE_URL}img/brand/logo.svg`}
+          alt="HunarLink"
+          width="40"
+          height="46"
+        />
+        <p style={{ fontSize: '0.95rem', opacity: 0.78 }}>
+          {shouldRedirectToLogin
+            ? 'Redirecting to sign in\u2026'
+            : 'Verifying your HunarLink session\u2026'}
+        </p>
+      </main>
+    );
   }
 
   return (
@@ -247,10 +254,13 @@ export default function App() {
         <Route path="/seller.html" element={<SellerPage />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/login.html" element={<LoginPage />} />
+        <Route path="/register" element={<LoginPage />} />
+        <Route path="/register.html" element={<LoginPage />} />
         <Route path="/orders" element={<OrdersPage />} />
         <Route path="/orders.html" element={<OrdersPage />} />
         <Route path="/profile" element={<ProfilePage />} />
         <Route path="/profile.html" element={<ProfilePage />} />
+        <Route path="/privacy" element={<PrivacyPromisePage />} />
         <Route path="*" element={<NotFound />} />
       </Routes>
       </Suspense>
@@ -268,6 +278,7 @@ export default function App() {
       {ui.modal?.type === 'checkout' && <CheckoutModal />}
       {ui.modal?.type === 'orders' && <OrdersModal />}
       <Toasts />
+      <CookieConsentBanner />
       <ChatWidget />
     </>
   );

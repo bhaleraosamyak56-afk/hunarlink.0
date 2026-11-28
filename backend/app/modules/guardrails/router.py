@@ -1,7 +1,7 @@
 """FastAPI router exposing ASIGS validation, upload, procurement ownership & Admin endpoints."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -14,6 +14,7 @@ from app.core.auth import (
 )
 from app.core.config import Settings, get_settings
 from app.core.database import get_db
+from app.core.security import SlidingWindowRateLimiter
 from app.models.core_models import SupplierLot, SupplierProfile
 from app.modules.guardrails import repository, service
 from app.modules.guardrails.rules.ownership import assert_owner_or_admin
@@ -32,6 +33,7 @@ from app.modules.guardrails.schemas import (
 )
 
 router = APIRouter(tags=["ASIGS Guardrails"])
+_document_upload_limiter = SlidingWindowRateLimiter(max_requests=20, window_seconds=300)
 
 
 def _corr_id(request: Request) -> str:
@@ -203,13 +205,38 @@ def respond_to_assignment(
 @router.post("/guardrails/documents/upload", response_model=FileUploadResponse, status_code=status.HTTP_201_CREATED)
 async def upload_document(
     request: Request,
+    response: Response,
     owner_scope: str = Form(default="seller_document"),
     file: UploadFile = File(...),
     principal: AuthenticatedPrincipal = Depends(get_current_principal),
     settings: Settings = Depends(get_settings),
     db: Session = Depends(get_db),
 ) -> FileUploadResponse:
-    raw_bytes = await file.read()
+    allowed, retry_after = _document_upload_limiter.allow(f"upload:{principal.user_id}")
+    if not allowed:
+        response.headers["Retry-After"] = str(retry_after)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Document upload rate limit exceeded. Please wait before uploading again.",
+        )
+
+    max_bytes = int(settings.max_upload_size_bytes)
+    chunks: list[bytes] = []
+    total_read = 0
+    chunk_size = 65_536
+    while True:
+        chunk = await file.read(chunk_size)
+        if not chunk:
+            break
+        total_read += len(chunk)
+        if total_read > max_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                detail=f"File exceeds maximum allowed size of {max_bytes} bytes.",
+            )
+        chunks.append(chunk)
+    raw_bytes = b"".join(chunks)
+
     return service.upload_private_document(
         db,
         principal=principal,
@@ -225,6 +252,7 @@ async def upload_document(
 @router.get("/guardrails/documents/{scan_id}")
 def download_document(
     scan_id: str,
+    request: Request,
     principal: AuthenticatedPrincipal = Depends(get_current_principal),
     settings: Settings = Depends(get_settings),
     db: Session = Depends(get_db),
@@ -234,11 +262,15 @@ def download_document(
         principal=principal,
         scan_id=scan_id,
         settings=settings,
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+        correlation_id=_corr_id(request),
     )
     return FileResponse(
         path=file_path,
         media_type=scan_row.detected_mime_type,
         filename=f"{scan_row.id}{file_path.suffix}",
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
     )
 
 

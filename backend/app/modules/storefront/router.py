@@ -16,7 +16,7 @@ import uuid
 from collections import defaultdict
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response, status
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
@@ -33,6 +33,7 @@ from app.models.core_models import (
     PlatformRole,
     Product,
     ProductImage,
+    ProductReview,
     ProductVariant,
     RetailOrder,
     RetailOrderItem,
@@ -42,10 +43,15 @@ from app.models.core_models import (
     SellerProfile,
     SellerVerificationApplication,
     User,
+    UserAddress,
+    UserLoginLog,
     UserRoleAssignment,
 )
 from app.models.guardrail_models import FileSecurityScan
+from app.modules.auth.deletion import execute_user_deletion
+from app.modules.auth.schemas import AdminDeleteUserRequest, DeleteAccountResponse
 from app.modules.guardrails import repository as guardrail_repo, service as guardrail_service
+from app.modules.guardrails.rules.input_validation import validate_safe_text
 from app.modules.guardrails.schemas import (
     GuardrailOutcome,
     GuardrailResponse,
@@ -56,7 +62,11 @@ from app.modules.storefront.schemas import (
     ArtisanReviewItem,
     ArtisanSummaryItem,
     CatalogProductItem,
+    CreateProductReviewRequest,
     CreateRetailOrderRequest,
+    ProductReviewItem,
+    ProductReviewsSummaryResponse,
+    RatingBreakdownItem,
     RetailOrderItemSummary,
     RetailOrderSummaryResponse,
     SellerStudioListingInput,
@@ -67,6 +77,22 @@ router = APIRouter(tags=["Storefront, Artisans & Retail Orders"])
 # Rate limiters for public lookup endpoints against UUID/slug enumeration
 artisan_lookup_rate_limiter = SlidingWindowRateLimiter(max_requests=120, window_seconds=60)
 product_lookup_rate_limiter = SlidingWindowRateLimiter(max_requests=180, window_seconds=60)
+review_write_rate_limiter = SlidingWindowRateLimiter(max_requests=10, window_seconds=300)
+
+_EMAIL_PII_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
+_PHONE_PII_RE = re.compile(r"(?<!\d)(?:\+91[\s\-]?)?[6-9]\d{4}[\s\-]?\d{5}(?!\d)")
+_AADHAAR_PII_RE = re.compile(r"(?<!\d)\d{4}[\s\-]?\d{4}[\s\-]?\d{4}(?!\d)")
+_PAN_PII_RE = re.compile(r"\b[A-Z]{5}\d{4}[A-Z]\b")
+
+
+def _scrub_review_pii(text: str | None) -> str | None:
+    if not text:
+        return text
+    cleaned = _EMAIL_PII_RE.sub("[redacted-email]", text)
+    cleaned = _PHONE_PII_RE.sub("[redacted-phone]", cleaned)
+    cleaned = _AADHAAR_PII_RE.sub("[redacted-id]", cleaned)
+    cleaned = _PAN_PII_RE.sub("[redacted-id]", cleaned)
+    return cleaned
 
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
 _SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,178}[a-z0-9])?$")
@@ -366,17 +392,8 @@ def get_active_catalog_product_by_query_id(
     return get_active_catalog_product(id, request, response, db)
 
 
-@router.get("/catalog/products/{identifier}", response_model=CatalogProductItem)
-def get_active_catalog_product(
-    identifier: str,
-    request: Request,
-    response: Response,
-    db: Session = Depends(get_db),
-) -> CatalogProductItem:
-    """Return a single active, approved product listing by its unique DB UUID (or slug)."""
-    _check_lookup_rate_limit(product_lookup_rate_limiter, request, response)
+def _resolve_active_catalog_row(db: Session, identifier: str):
     clean_id, is_uuid = _validate_identifier(identifier, label="product ID")
-
     stmt = (
         select(SellerProductListing, Product, Category, SellerProfile, User)
         .join(Product, Product.id == SellerProductListing.product_id)
@@ -409,8 +426,19 @@ def get_active_catalog_product(
     row = db.execute(stmt).first()
     if row is None or not _has_active_direct_seller_role(db, row[4].id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Craft listing not found.")
+    return row
 
-    listing, product, category, seller, artisan_user = row
+
+@router.get("/catalog/products/{identifier}", response_model=CatalogProductItem)
+def get_active_catalog_product(
+    identifier: str,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+) -> CatalogProductItem:
+    """Return a single active, approved product listing by its unique DB UUID (or slug)."""
+    _check_lookup_rate_limit(product_lookup_rate_limiter, request, response)
+    listing, product, category, seller, artisan_user = _resolve_active_catalog_row(db, identifier)
     images_map = _load_product_images_map(db, [product.id])
     portraits_map = _load_seller_portraits_map(db, [seller.id])
     meta_map = _load_seller_metadata_map(db, [seller.id])
@@ -423,6 +451,338 @@ def get_active_catalog_product(
         artisan_user,
         images=images_map.get(product.id),
         artisan_portrait_url=portraits_map.get(seller.id) or (meta_map.get(seller.id) or {}).get("portrait_url"),
+    )
+
+
+def _compute_product_reviews_summary(
+    db: Session,
+    *,
+    listing: SellerProductListing,
+    product: Product,
+    seller: SellerProfile,
+) -> ProductReviewsSummaryResponse:
+    ProductReview.__table__.create(bind=db.get_bind(), checkfirst=True)
+    db_rows = db.execute(
+        select(ProductReview, User)
+        .join(User, User.id == ProductReview.reviewer_user_id)
+        .where(
+            ProductReview.product_id == product.id,
+            ProductReview.moderation_status == "PUBLISHED",
+        )
+        .order_by(ProductReview.created_at.desc())
+    ).all()
+
+    reviewer_ids = list({u.id for _, u in db_rows})
+    city_by_user_id: dict[str, str] = {}
+    if reviewer_ids:
+        for addr in db.scalars(
+            select(UserAddress)
+            .where(UserAddress.user_id.in_(reviewer_ids), UserAddress.is_active == True)  # noqa: E712
+            .order_by(UserAddress.is_default.desc(), UserAddress.created_at.desc())
+        ).all():
+            if addr.user_id not in city_by_user_id and addr.city:
+                city_by_user_id[addr.user_id] = addr.city
+
+    items: list[ProductReviewItem] = []
+    for rev, reviewer in db_rows:
+        anon = bool(getattr(rev, "is_anonymous", False))
+        display_name = (
+            "Anonymous Collector"
+            if anon
+            else (
+                reviewer.display_name
+                or f"{reviewer.first_name} {reviewer.last_name or ''}".strip()
+                or "Verified Collector"
+            )
+        )
+        items.append(
+            ProductReviewItem(
+                id=rev.id,
+                product_id=rev.product_id,
+                author_name=display_name,
+                author_city="India" if anon else city_by_user_id.get(reviewer.id, "India"),
+                is_anonymous=anon,
+                rating=int(rev.rating),
+                title=_scrub_review_pii(rev.title),
+                review_body=_scrub_review_pii(rev.review_body) or "",
+                is_verified_purchase=bool(rev.is_verified_purchase),
+                seller_reply=_scrub_review_pii(rev.seller_reply),
+                seller_replied_at=rev.seller_replied_at,
+                created_at=rev.created_at,
+                source="database",
+            )
+        )
+
+    # Also surface historical collector reviews from artisan verification metadata
+    meta_map = _load_seller_metadata_map(db, [seller.id])
+    seller_meta = meta_map.get(seller.id) or {}
+    archived_reviews = (
+        seller_meta.get("reviews") if isinstance(seller_meta.get("reviews"), list) else []
+    )
+    for idx, raw_rev in enumerate(archived_reviews):
+        if not isinstance(raw_rev, dict) or not raw_rev.get("text"):
+            continue
+        items.append(
+            ProductReviewItem(
+                id=f"archive-{seller.id}-{idx}",
+                product_id=product.id,
+                author_name=str(raw_rev.get("author") or "Verified Collector"),
+                author_city=str(raw_rev.get("city") or "India"),
+                rating=max(1, min(5, int(raw_rev.get("stars") or 5))),
+                title=f"Collected from {seller.store_name}",
+                review_body=str(raw_rev.get("text")),
+                is_verified_purchase=True,
+                created_at=product.created_at,
+                source="heritage_archive",
+            )
+        )
+
+    attrs = product.attributes_json if isinstance(product.attributes_json, dict) else {}
+    baseline_count = int(
+        attrs["baseline_review_count"]
+        if "baseline_review_count" in attrs
+        else (attrs.get("review_count") or 0)
+    )
+    baseline_rating = float(
+        attrs["baseline_rating"]
+        if "baseline_rating" in attrs
+        else (attrs.get("rating") or 4.9)
+    )
+    db_count = len(db_rows)
+    total_reviews = max(baseline_count + db_count, len(items))
+
+    if total_reviews == 0:
+        avg_rating = float(attrs.get("rating") or 4.9)
+    elif baseline_count > 0 and db_count > 0:
+        weighted = (baseline_rating * baseline_count) + sum(int(r.rating) for r, _ in db_rows)
+        avg_rating = round(weighted / (baseline_count + db_count), 2)
+    elif db_count > 0:
+        avg_rating = round(sum(int(r.rating) for r, _ in db_rows) / db_count, 2)
+    else:
+        avg_rating = round(baseline_rating, 2)
+
+    star_counts = {s: 0 for s in (5, 4, 3, 2, 1)}
+    for item in items:
+        star_counts[max(1, min(5, int(item.rating)))] += 1
+
+    # Distribute unarchived historical baseline count smoothly around baseline_rating
+    missing_baseline = max(0, total_reviews - len(items))
+    if missing_baseline > 0:
+        five_share = int(round(missing_baseline * max(0.65, min(0.92, (avg_rating - 3.6) / 1.4))))
+        four_share = max(0, missing_baseline - five_share)
+        star_counts[5] += five_share
+        star_counts[4] += four_share
+
+    denom = max(total_reviews, 1)
+    breakdown = [
+        RatingBreakdownItem(
+            stars=s,
+            count=star_counts[s],
+            percentage=int(round((star_counts[s] * 100) / denom)) if total_reviews else 0,
+        )
+        for s in (5, 4, 3, 2, 1)
+    ]
+
+    verified_count = sum(1 for i in items if i.is_verified_purchase) + missing_baseline
+    return ProductReviewsSummaryResponse(
+        product_id=product.id,
+        listing_id=listing.id,
+        title=listing.listing_title or product.name,
+        average_rating=round(avg_rating, 2),
+        total_reviews=total_reviews,
+        verified_purchase_count=verified_count,
+        rating_breakdown=breakdown,
+        reviews=items,
+    )
+
+
+@router.get("/catalog/products/{identifier}/reviews", response_model=ProductReviewsSummaryResponse)
+def list_product_reviews(
+    identifier: str,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+) -> ProductReviewsSummaryResponse:
+    """Return published DB reviews + historical collector reviews for an active listing."""
+    _check_lookup_rate_limit(product_lookup_rate_limiter, request, response)
+    listing, product, _category, seller, _artisan_user = _resolve_active_catalog_row(db, identifier)
+    return _compute_product_reviews_summary(
+        db, listing=listing, product=product, seller=seller
+    )
+
+
+@router.post(
+    "/catalog/products/{identifier}/reviews",
+    response_model=ProductReviewItem,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_product_review(
+    identifier: str,
+    payload: CreateProductReviewRequest,
+    request: Request,
+    response: Response,
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> ProductReviewItem:
+    """Persist an authenticated buyer/collector review in `product_reviews` with ASIGS guardrails."""
+    allowed, retry_after = review_write_rate_limiter.allow(f"rev:{principal.user_id}")
+    if not allowed:
+        response.headers["Retry-After"] = str(retry_after)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Review submission rate limit exceeded. Please wait before posting another review.",
+        )
+
+    listing, product, _category, seller, _artisan_user = _resolve_active_catalog_row(db, identifier)
+    ProductReview.__table__.create(bind=db.get_bind(), checkfirst=True)
+
+    clean_title = _scrub_review_pii((payload.title or "").strip()) or None
+    clean_body = _scrub_review_pii(payload.review_body.strip()) or ""
+    clean_city = (payload.author_city or "").strip() or None
+
+    issues = [
+        *validate_safe_text("title", clean_title, required=False, min_len=2, max_len=160),
+        *validate_safe_text("review_body", clean_body, required=True, min_len=5, max_len=2000),
+        *validate_safe_text("author_city", clean_city, required=False, min_len=2, max_len=100),
+    ]
+    blocks = [i for i in issues if i.severity == GuardrailOutcome.BLOCK]
+    if blocks:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=blocks[0].message,
+        )
+
+    reviewer = db.scalar(select(User).where(User.id == principal.user_id))
+    if reviewer is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Reviewer account not found.")
+
+    # Check if user has a confirmed/paid/COD retail order item for this product not yet reviewed
+    existing_reviewed_item_ids = set(
+        db.scalars(
+            select(ProductReview.retail_order_item_id).where(
+                ProductReview.reviewer_user_id == reviewer.id,
+                ProductReview.retail_order_item_id.is_not(None),
+            )
+        ).all()
+    )
+    purchased_items = list(
+        db.scalars(
+            select(RetailOrderItem)
+            .join(RetailOrder, RetailOrder.id == RetailOrderItem.retail_order_id)
+            .where(
+                RetailOrder.customer_user_id == reviewer.id,
+                RetailOrderItem.product_id == product.id,
+                or_(
+                    RetailOrder.payment_status.in_(["PAID", "COD_PENDING"]),
+                    RetailOrder.fulfilment_status.in_(
+                        ["CONFIRMED", "PROCESSING", "PARTIALLY_SHIPPED", "SHIPPED", "DELIVERED"]
+                    ),
+                ),
+            )
+            .order_by(RetailOrder.created_at.desc())
+        ).all()
+    )
+    matched_order_item = next(
+        (oi for oi in purchased_items if oi.id not in existing_reviewed_item_ids),
+        None,
+    )
+    is_verified_purchase = bool(purchased_items)
+
+    review = ProductReview(
+        id=new_uuid(),
+        product_id=product.id,
+        product_variant_id=listing.product_variant_id,
+        seller_profile_id=seller.id,
+        reviewer_user_id=reviewer.id,
+        retail_order_item_id=matched_order_item.id if matched_order_item else None,
+        rating=int(payload.rating),
+        title=clean_title,
+        review_body=clean_body,
+        is_verified_purchase=is_verified_purchase,
+        is_anonymous=bool(payload.is_anonymous),
+        moderation_status="PUBLISHED",
+    )
+    db.add(review)
+    db.flush()
+
+    # Keep Product & SellerProfile aggregates in sync
+    attrs = dict(product.attributes_json) if isinstance(product.attributes_json, dict) else {}
+    attrs.setdefault("baseline_review_count", int(attrs.get("review_count") or 0))
+    attrs.setdefault("baseline_rating", float(attrs.get("rating") or 4.9))
+
+    db_ratings = list(
+        db.scalars(
+            select(ProductReview.rating).where(
+                ProductReview.product_id == product.id,
+                ProductReview.moderation_status == "PUBLISHED",
+            )
+        ).all()
+    )
+    b_cnt = int(attrs["baseline_review_count"])
+    b_rat = float(attrs["baseline_rating"])
+    total_cnt = b_cnt + len(db_ratings)
+    new_avg = round(((b_rat * b_cnt) + sum(int(r) for r in db_ratings)) / max(total_cnt, 1), 2)
+    attrs["review_count"] = total_cnt
+    attrs["rating"] = new_avg
+    product.attributes_json = attrs
+
+    seller.total_reviews = int(seller.total_reviews or 0) + 1
+    if seller.total_reviews > 0:
+        prev_sum = float(seller.average_rating or Decimal("4.90")) * max(seller.total_reviews - 1, 0)
+        seller.average_rating = Decimal(f"{(prev_sum + payload.rating) / seller.total_reviews:.2f}")
+
+    record_audit_log(
+        db,
+        actor_user_id=reviewer.id,
+        actor_role="CUSTOMER",
+        action="PRODUCT_REVIEW_PUBLISHED",
+        target_type="product_reviews",
+        target_id=review.id,
+        correlation_id=getattr(request.state, "correlation_id", "") or str(uuid.uuid4()),
+        new_values={
+            "product_id": product.id,
+            "rating": review.rating,
+            "is_verified_purchase": is_verified_purchase,
+        },
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+
+    db.commit()
+    db.refresh(review)
+
+    resolved_city = clean_city
+    if not resolved_city:
+        addr = db.scalar(
+            select(UserAddress)
+            .where(UserAddress.user_id == reviewer.id, UserAddress.is_active == True)  # noqa: E712
+            .order_by(UserAddress.is_default.desc(), UserAddress.created_at.desc())
+            .limit(1)
+        )
+        resolved_city = addr.city if addr and addr.city else "India"
+
+    anon = bool(review.is_anonymous)
+    display_name = (
+        "Anonymous Collector"
+        if anon
+        else (
+            reviewer.display_name
+            or f"{reviewer.first_name} {reviewer.last_name or ''}".strip()
+            or "Verified Collector"
+        )
+    )
+    return ProductReviewItem(
+        id=review.id,
+        product_id=review.product_id,
+        author_name=display_name,
+        author_city="India" if anon else resolved_city,
+        is_anonymous=anon,
+        rating=review.rating,
+        title=review.title,
+        review_body=review.review_body or "",
+        is_verified_purchase=review.is_verified_purchase,
+        created_at=review.created_at,
+        source="database",
     )
 
 
@@ -784,20 +1144,35 @@ def admin_live_overview(
     db: Session = Depends(get_db),
 ) -> dict:
     """Strictly admin-only real database snapshot for the Admin Console."""
-    users = list(db.scalars(select(User).order_by(User.created_at.desc()).limit(200)).all())
-    sellers = list(db.scalars(select(SellerProfile).order_by(SellerProfile.created_at.desc()).limit(200)).all())
-    applications = list(
+    all_users = list(db.scalars(select(User).order_by(User.created_at.desc()).limit(2000)).all())
+    users = [
+        u
+        for u in all_users
+        if not (
+            u.account_status == "DEACTIVATED"
+            and u.email.endswith("@deleted.hunarlink.local")
+        )
+    ]
+    deactivated_count = len(all_users) - len(users)
+    active_user_ids = {u.id for u in users}
+    all_sellers = list(db.scalars(select(SellerProfile).order_by(SellerProfile.created_at.desc()).limit(2000)).all())
+    sellers = [
+        s
+        for s in all_sellers
+        if s.profile_status != "TERMINATED" and s.user_id in active_user_ids
+    ]
+    all_applications = list(
         db.scalars(
             select(SellerVerificationApplication)
             .order_by(SellerVerificationApplication.created_at.desc())
-            .limit(200)
+            .limit(1000)
         ).all()
     )
     seller_docs = list(
-        db.scalars(select(SellerDocument).order_by(SellerDocument.created_at.desc()).limit(300)).all()
+        db.scalars(select(SellerDocument).order_by(SellerDocument.created_at.desc()).limit(1000)).all()
     )
     listings = list(
-        db.scalars(select(SellerProductListing).order_by(SellerProductListing.created_at.desc()).limit(200)).all()
+        db.scalars(select(SellerProductListing).order_by(SellerProductListing.created_at.desc()).limit(1000)).all()
     )
     orders = list(db.scalars(select(RetailOrder).order_by(RetailOrder.created_at.desc()).limit(100)).all())
     admin_creds = list(
@@ -815,9 +1190,16 @@ def admin_live_overview(
         if rcode not in roles_by_user_id[uid]:
             roles_by_user_id[uid].append(rcode)
 
-    users_by_id = {u.id: u for u in users}
-    sellers_by_id = {s.id: s for s in sellers}
+    users_by_id = {u.id: u for u in all_users}
+    sellers_by_id = {s.id: s for s in all_sellers}
     seller_by_user_id = {s.user_id: s for s in sellers}
+    applications = [
+        app_row
+        for app_row in all_applications
+        if app_row.seller_profile_id in sellers_by_id
+        and sellers_by_id[app_row.seller_profile_id].user_id in active_user_ids
+        and sellers_by_id[app_row.seller_profile_id].profile_status != "TERMINATED"
+    ]
     active_admin_user_ids = {ac.user_id for ac in admin_creds if ac.is_active}
     docs_by_app_id: dict[str, list[SellerDocument]] = defaultdict(list)
     for d in seller_docs:
@@ -846,18 +1228,149 @@ def admin_live_overview(
         if "DIRECT_SELLER" in roles_by_user_id.get(u.id, []) and u.id not in seller_by_user_id
     ]
 
+    UserLoginLog.__table__.create(bind=db.get_bind(), checkfirst=True)
+    login_logs = list(
+        db.scalars(
+            select(UserLoginLog).order_by(UserLoginLog.created_at.desc()).limit(500)
+        ).all()
+    )
+
+    login_stats: dict[tuple[str, str], dict] = {}
+    any_login_by_user: set[str] = set()
+    for log_row in login_logs:
+        if log_row.auth_event_type == "LOGIN":
+            any_login_by_user.add(log_row.user_id)
+            key = (log_row.user_id, log_row.role_code)
+            entry = login_stats.get(key)
+            if entry is None:
+                login_stats[key] = {"count": 1, "latest": log_row.created_at}
+            else:
+                entry["count"] += 1
+                if log_row.created_at > entry["latest"]:
+                    entry["latest"] = log_row.created_at
+
+    admin_cred_by_user_id = {ac.user_id: ac for ac in admin_creds}
+
+    def _build_role_entry(u: User, role_code: str) -> dict:
+        stat = login_stats.get((u.id, role_code))
+        ac = admin_cred_by_user_id.get(u.id) if role_code == "ADMIN" else None
+        sp = seller_by_user_id.get(u.id) if role_code == "DIRECT_SELLER" else None
+        legacy_login = None
+        if stat is None and u.id not in any_login_by_user:
+            legacy_login = (ac.last_login_at if ac else None) or u.last_login_at
+        elif role_code == "ADMIN" and ac and ac.last_login_at and (stat is None or ac.last_login_at > stat["latest"]):
+            legacy_login = ac.last_login_at
+        effective_last_login = (stat["latest"] if stat else None) or legacy_login
+        login_count = stat["count"] if stat else (1 if effective_last_login is not None else 0)
+        return {
+            "user_id": u.id,
+            "clerk_user_id": u.clerk_user_id,
+            "name": u.display_name or f"{u.first_name} {u.last_name or ''}".strip(),
+            "email": u.email,
+            "phone": u.phone,
+            "account_role": u.account_role,
+            "role_code": role_code,
+            "account_status": u.account_status,
+            "registered_at": u.created_at.isoformat(),
+            "last_login_at": effective_last_login.isoformat() if effective_last_login else None,
+            "login_count": login_count,
+            "has_logged_in": effective_last_login is not None,
+            "store_name": sp.store_name if sp else None,
+            "seller_profile_id": sp.id if sp else None,
+            "verification_status": sp.verification_status if sp else None,
+            "profile_status": sp.profile_status if sp else None,
+            "admin_active": ac.is_active if ac else None,
+        }
+
+    role_groups_spec = [
+        ("buyers", "Buyers (CUSTOMER)", {"CUSTOMER"}),
+        ("artisans", "Artisans (DIRECT_SELLER)", {"DIRECT_SELLER"}),
+        ("wholesale", "Wholesale / Dealers / Suppliers", {"WHOLESALE_BUYER", "DEALER", "SUPPLIER"}),
+        ("admins", "Administrators (ADMIN)", {"ADMIN"}),
+    ]
+    role_directory: dict[str, dict] = {}
+    for group_key, group_label, target_codes in role_groups_spec:
+        registered_items: list[dict] = []
+        seen_uids: set[str] = set()
+        for u in users:
+            u_roles = set(roles_by_user_id.get(u.id, []))
+            if group_key == "admins" and u.id in admin_cred_by_user_id:
+                u_roles.add("ADMIN")
+            matched = sorted(u_roles & target_codes)
+            if not matched:
+                continue
+            if u.id in seen_uids:
+                continue
+            seen_uids.add(u.id)
+            registered_items.append(_build_role_entry(u, matched[0]))
+
+        logged_in_items = sorted(
+            [item for item in registered_items if item["has_logged_in"]],
+            key=lambda x: x["last_login_at"] or "",
+            reverse=True,
+        )
+        never_logged_in_items = [item for item in registered_items if not item["has_logged_in"]]
+        role_directory[group_key] = {
+            "label": group_label,
+            "counts": {
+                "registered": len(registered_items),
+                "logged_in": len(logged_in_items),
+                "never_logged_in": len(never_logged_in_items),
+                "total_login_events": sum(item["login_count"] for item in registered_items),
+            },
+            "registered": registered_items,
+            "logged_in": logged_in_items,
+            "never_logged_in": never_logged_in_items,
+        }
+
     return {
         "admin_user_id": admin.user_id,
         "admin_permissions": sorted(admin.admin_permissions),
         "counts": {
             "users": len(users),
+            "deactivated_users": deactivated_count,
             "sellers": len(sellers),
             "pending_applications": pending_apps_count,
             "incomplete_artisan_signups": len(incomplete_artisan_users),
             "listings": len(listings),
             "orders": len(orders),
             "admins": len(admin_creds),
+            "logged_in_users": sum(
+                1
+                for u in users
+                if u.last_login_at is not None
+                or u.id in any_login_by_user
+                or (u.id in admin_cred_by_user_id and admin_cred_by_user_id[u.id].last_login_at is not None)
+            ),
+            "registered_buyers": role_directory["buyers"]["counts"]["registered"],
+            "logged_in_buyers": role_directory["buyers"]["counts"]["logged_in"],
+            "registered_artisans": role_directory["artisans"]["counts"]["registered"],
+            "logged_in_artisans": role_directory["artisans"]["counts"]["logged_in"],
+            "registered_wholesale": role_directory["wholesale"]["counts"]["registered"],
+            "logged_in_wholesale": role_directory["wholesale"]["counts"]["logged_in"],
+            "registered_admins": role_directory["admins"]["counts"]["registered"],
+            "logged_in_admins": role_directory["admins"]["counts"]["logged_in"],
         },
+        "role_directory": role_directory,
+        "recent_auth_events": [
+            {
+                "id": ev.id,
+                "user_id": ev.user_id,
+                "name": (
+                    users_by_id[ev.user_id].display_name
+                    or f"{users_by_id[ev.user_id].first_name} {users_by_id[ev.user_id].last_name or ''}".strip()
+                )
+                if ev.user_id in users_by_id
+                else ev.email,
+                "email": ev.email,
+                "role_code": ev.role_code,
+                "auth_event_type": ev.auth_event_type,
+                "auth_method": ev.auth_method,
+                "ip_address": ev.ip_address,
+                "created_at": ev.created_at.isoformat(),
+            }
+            for ev in login_logs[:100]
+        ],
         "incomplete_artisan_signups": [
             {
                 "user_id": u.id,
@@ -953,7 +1466,8 @@ def admin_live_overview(
                     else ac.email
                 ),
                 "email": ac.email,
-                "password_hash": ac.password_hash,
+                "password_configured": bool(ac.password_hash),
+                "hash_algorithm": ac.password_hash.split("$", 1)[0] if ac.password_hash else None,
                 "is_active": ac.is_active,
                 "last_login_at": ac.last_login_at.isoformat() if ac.last_login_at else None,
                 "created_at": ac.created_at.isoformat(),
@@ -967,6 +1481,7 @@ def admin_live_overview(
                 "email": u.email,
                 "name": u.display_name or f"{u.first_name} {u.last_name or ''}".strip(),
                 "phone": u.phone,
+                "account_role": u.account_role,
                 "roles": roles_by_user_id.get(u.id, []),
                 "onboarding_state": (
                     "ADMIN"
@@ -989,6 +1504,23 @@ def admin_live_overview(
                     )
                 ),
                 "account_status": u.account_status,
+                "last_login_at": (
+                    u.last_login_at.isoformat()
+                    if u.last_login_at
+                    else (
+                        admin_cred_by_user_id[u.id].last_login_at.isoformat()
+                        if u.id in admin_cred_by_user_id and admin_cred_by_user_id[u.id].last_login_at
+                        else None
+                    )
+                ),
+                "has_logged_in": bool(
+                    u.last_login_at is not None
+                    or u.id in any_login_by_user
+                    or (u.id in admin_cred_by_user_id and admin_cred_by_user_id[u.id].last_login_at is not None)
+                ),
+                "login_count": sum(
+                    st["count"] for (uid, _rc), st in login_stats.items() if uid == u.id
+                ),
                 "created_at": u.created_at.isoformat(),
             }
             for u in users
@@ -1031,6 +1563,197 @@ def admin_live_overview(
             for o in orders
         ],
     }
+
+
+@router.get("/admin/users-by-role")
+def admin_users_by_role(
+    role_code: str | None = None,
+    activity: str = "all",
+    q: str | None = None,
+    admin: AuthenticatedPrincipal = Depends(require_admin_permission("payments.read")),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Dedicated admin endpoint separating Registered vs Logged-In users per role."""
+    snapshot = admin_live_overview(admin=admin, db=db)
+    role_dir = snapshot["role_directory"]
+    recent_events = snapshot["recent_auth_events"]
+    search_term = (q or "").strip().lower()
+
+    def _matches_user(item: dict) -> bool:
+        if not search_term:
+            return True
+        haystack = " ".join(
+            str(v or "")
+            for v in (
+                item.get("name"),
+                item.get("email"),
+                item.get("phone"),
+                item.get("store_name"),
+                item.get("account_role"),
+                item.get("role_code"),
+                item.get("user_id"),
+                item.get("clerk_user_id"),
+            )
+        ).lower()
+        return search_term in haystack
+
+    code_map = {
+        "CUSTOMER": "buyers",
+        "BUYER": "buyers",
+        "DIRECT_SELLER": "artisans",
+        "ARTISAN": "artisans",
+        "WHOLESALE": "wholesale",
+        "WHOLESALE_BUYER": "wholesale",
+        "DEALER": "wholesale",
+        "SUPPLIER": "wholesale",
+        "ADMIN": "admins",
+    }
+    selected_key = code_map.get((role_code or "").strip().upper()) if role_code else None
+    if role_code and selected_key is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Unsupported role_code filter. Use CUSTOMER, DIRECT_SELLER, WHOLESALE, or ADMIN.",
+        )
+
+    norm_activity = (activity or "all").strip().lower()
+    if norm_activity not in {"all", "registered", "logged_in", "never_logged_in"}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="activity must be one of: all, registered, logged_in, never_logged_in.",
+        )
+
+    result_groups: dict[str, dict] = {}
+    for key, group in role_dir.items():
+        if selected_key and key != selected_key:
+            continue
+        if norm_activity == "logged_in":
+            rows = group["logged_in"]
+        elif norm_activity == "never_logged_in":
+            rows = group["never_logged_in"]
+        else:
+            rows = group["registered"]
+        filtered_rows = [row for row in rows if _matches_user(row)]
+        result_groups[key] = {
+            "label": group["label"],
+            "counts": group["counts"],
+            "users": filtered_rows,
+        }
+
+    filtered_events = [
+        ev
+        for ev in recent_events
+        if (not selected_key or code_map.get(ev["role_code"]) == selected_key)
+        and (
+            not search_term
+            or search_term
+            in " ".join(
+                str(ev.get(k) or "")
+                for k in ("name", "email", "role_code", "auth_method", "ip_address", "user_id")
+            ).lower()
+        )
+    ]
+    return {
+        "role_filter": selected_key or "all",
+        "activity_filter": norm_activity,
+        "q": search_term or None,
+        "groups": result_groups,
+        "recent_auth_events": filtered_events,
+    }
+
+
+def _execute_admin_delete_user(
+    *,
+    user_id: str,
+    payload: AdminDeleteUserRequest,
+    request: Request,
+    admin: AuthenticatedPrincipal,
+    db: Session,
+    settings: Settings,
+) -> DeleteAccountResponse:
+    if not _UUID_RE.match(user_id):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Invalid user UUID format.",
+        )
+    if user_id == admin.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrators cannot delete their own admin account here.",
+        )
+    target = db.scalar(select(User).where(User.id == user_id))
+    if target is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found in database.",
+        )
+    if target.account_status == "DEACTIVATED" and target.email.endswith("@deleted.hunarlink.local"):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User account has already been deleted.",
+        )
+
+    clerk_secret = settings.clerk_secret_key.get_secret_value().strip()
+    result = execute_user_deletion(
+        db,
+        user=target,
+        actor_user_id=admin.user_id,
+        actor_role="ADMIN",
+        reason=payload.reason or f"Deleted by administrator {admin.email}",
+        request=request,
+        clerk_secret=clerk_secret,
+        current_password=None,
+        allow_purge_if_clean=True,
+        audit_action="ADMIN_USER_DELETED",
+        self_delete_mode=False,
+    )
+    return DeleteAccountResponse(
+        deleted=True,
+        anonymized=result.anonymized,
+        purged=result.purged,
+        clerk_deleted=result.clerk_deleted,
+        clerk_deleted_count=result.clerk_deleted_count,
+        message=result.message,
+    )
+
+
+@router.delete("/admin/users/{user_id}", response_model=DeleteAccountResponse)
+def admin_delete_user_rest(
+    user_id: str,
+    request: Request,
+    payload: AdminDeleteUserRequest | None = Body(default=None),
+    admin: AuthenticatedPrincipal = Depends(require_admin_permission("guardrails.decide")),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> DeleteAccountResponse:
+    """Safely delete/anonymize a user in DB AND automatically delete them from Clerk."""
+    return _execute_admin_delete_user(
+        user_id=user_id,
+        payload=payload or AdminDeleteUserRequest(),
+        request=request,
+        admin=admin,
+        db=db,
+        settings=settings,
+    )
+
+
+@router.post("/admin/users/{user_id}/delete", response_model=DeleteAccountResponse)
+def admin_delete_user_post(
+    user_id: str,
+    request: Request,
+    payload: AdminDeleteUserRequest | None = Body(default=None),
+    admin: AuthenticatedPrincipal = Depends(require_admin_permission("guardrails.decide")),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> DeleteAccountResponse:
+    """POST alias for deleting a user cleanly from DB and Clerk."""
+    return _execute_admin_delete_user(
+        user_id=user_id,
+        payload=payload or AdminDeleteUserRequest(),
+        request=request,
+        admin=admin,
+        db=db,
+        settings=settings,
+    )
 
 
 _GUILD_CATEGORIES: dict[str, tuple[str, str, bool]] = {
@@ -1173,6 +1896,10 @@ def validate_studio_listing(
         seller_sku=sku,
         listing_title=payload.title,
         description=payload.description,
+        technique=payload.technique,
+        dimensions=payload.dimensions,
+        origin_district=payload.origin_district,
+        purity_metric=payload.purity_metric,
         selling_price=payload.selling_price,
         compare_at_mrp=payload.compare_at_mrp,
         currency_code=payload.currency_code,
@@ -1215,6 +1942,10 @@ def publish_studio_listing(
         seller_sku=sku,
         listing_title=payload.title,
         description=payload.description,
+        technique=payload.technique,
+        dimensions=payload.dimensions,
+        origin_district=payload.origin_district,
+        purity_metric=payload.purity_metric,
         selling_price=payload.selling_price,
         compare_at_mrp=payload.compare_at_mrp,
         currency_code=payload.currency_code,
@@ -1245,6 +1976,10 @@ def publish_studio_listing(
         seller_sku=final_sku,
         listing_title=payload.title,
         description=payload.description,
+        technique=payload.technique,
+        dimensions=payload.dimensions,
+        origin_district=payload.origin_district,
+        purity_metric=payload.purity_metric,
         selling_price=payload.selling_price,
         compare_at_mrp=payload.compare_at_mrp,
         currency_code=payload.currency_code,

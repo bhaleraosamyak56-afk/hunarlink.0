@@ -7,6 +7,7 @@ import {
   canAttemptBackend,
   decideAdminArtisanApplication,
   decideAdminGuardrailCase,
+  deleteAdminUser,
   fetchAdminGuardrailCases,
   fetchAdminGuardrailRules,
   fetchAdminOverview,
@@ -17,7 +18,8 @@ import {
   fetchMyAuthProfile,
   initiateAdminRefund,
   moderateAdminListing,
-  verifyAdminSeller
+  verifyAdminSeller,
+  broadcastSessionRevocation
 } from '../../services/apiClient.js';
 import { generateIdempotencyKey } from '../../services/razorpayCheckout.js';
 import AdminLoginPage from './AdminLoginPage.jsx';
@@ -29,7 +31,9 @@ import {
   IconPackage,
   IconReceipt,
   IconShield,
-  IconLogout
+  IconLogout,
+  IconSearchScan,
+  IconX
 } from '../../components/LineIcons.jsx';
 
 /* ==========================================================================
@@ -85,10 +89,17 @@ export default function AdminPage() {
     profile: null
   }));
   const [tab, setTab] = useState('overview');
+  const [roleFilter, setRoleFilter] = useState('buyers');
+  const [activityFilter, setActivityFilter] = useState('registered');
+  const [userSearch, setUserSearch] = useState('');
+  const [sellerSearch, setSellerSearch] = useState('');
   const [loading, setLoading] = useState(false);
-  const [revealedHashes, setRevealedHashes] = useState({});
   const [cardPreviewModal, setCardPreviewModal] = useState(null);
   const [busyAppId, setBusyAppId] = useState(null);
+  const [deleteConfirmUser, setDeleteConfirmUser] = useState(null);
+  const [deleteConfirmReason, setDeleteConfirmReason] = useState('');
+  const [deleteConfirmError, setDeleteConfirmError] = useState('');
+  const [busyDeleteUserId, setBusyDeleteUserId] = useState(null);
   const [data, setData] = useState({
     overview: null,
     payments: [],
@@ -246,6 +257,43 @@ export default function AdminPage() {
       loadLiveAdminData(adminToken);
     } catch (err) {
       toast(err?.message || 'Could not update listing status.', 'error');
+    }
+  }
+
+  async function handleConfirmDeleteUser() {
+    if (!deleteConfirmUser) return;
+    setDeleteConfirmError('');
+    setBusyDeleteUserId(deleteConfirmUser.user_id);
+    try {
+      const res = await deleteAdminUser(
+        deleteConfirmUser.user_id,
+        {
+          reason:
+            deleteConfirmReason.trim() ||
+            `Removed from Admin Console by ${authState.email || 'admin'}`
+        },
+        adminToken
+      );
+      broadcastSessionRevocation({
+        userId: deleteConfirmUser.user_id,
+        clerkUserId: deleteConfirmUser.clerk_user_id,
+        email: deleteConfirmUser.email
+      });
+      toast(
+        res?.message ||
+          `Deleted ${deleteConfirmUser.email} from HunarLink DB${res?.clerk_deleted ? ' & Clerk' : ''}.`,
+        'success'
+      );
+      setDeleteConfirmUser(null);
+      setDeleteConfirmReason('');
+      setDeleteConfirmError('');
+      await loadLiveAdminData(adminToken);
+    } catch (err) {
+      const msg = err?.message || 'Could not delete user.';
+      setDeleteConfirmError(msg);
+      toast(msg, 'error');
+    } finally {
+      setBusyDeleteUserId(null);
     }
   }
 
@@ -462,67 +510,420 @@ export default function AdminPage() {
           </div>
         </div>
 
-        {tab === 'overview' && (
-          <section className="fk-panel-card" style={{ padding: '1.25rem' }}>
-            <h2 style={{ marginBottom: '0.9rem', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-              <IconUsers size={18} /> Registered Users (Live DB)
-            </h2>
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.88rem' }}>
-                <thead>
-                  <tr style={{ textAlign: 'left', borderBottom: '1px solid rgba(0,0,0,0.1)' }}>
-                    <th style={{ padding: '0.55rem' }}>Name</th>
-                    <th style={{ padding: '0.55rem' }}>Email</th>
-                    <th style={{ padding: '0.55rem' }}>Identity ID</th>
-                    <th style={{ padding: '0.55rem' }}>Onboarding Stage</th>
-                    <th style={{ padding: '0.55rem' }}>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(ov.users || []).map((u) => (
-                    <tr key={u.id} style={{ borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
-                      <td style={{ padding: '0.55rem', fontWeight: 600 }}>{u.name}</td>
-                      <td style={{ padding: '0.55rem' }}>{u.email}</td>
-                      <td style={{ padding: '0.55rem', fontFamily: 'monospace', fontSize: '0.78rem' }}>{u.clerk_user_id}</td>
-                      <td style={{ padding: '0.55rem', fontSize: '0.78rem' }}>
-                        {u.onboarding_state === 'ADMIN' ? (
-                          <span
-                            style={{
-                              display: 'inline-block',
-                              padding: '0.16rem 0.52rem',
-                              borderRadius: '999px',
-                              background: 'rgba(20, 62, 48, 0.12)',
-                              color: '#143e30',
-                              fontWeight: 700,
-                              letterSpacing: '0.03em'
-                            }}
-                          >
-                            ADMIN
-                          </span>
-                        ) : u.onboarding_state === 'STEP_1_ONLY_NO_CARD_YET' ? (
-                          <span style={{ color: '#8a5300', fontWeight: 600 }}>
-                            Step 1 Signed In (Awaiting Card Upload on /auth?tab=verify)
-                          </span>
-                        ) : u.onboarding_state === 'SUBMITTED' ? (
-                          <span style={{ color: '#a34121', fontWeight: 600 }}>
-                            Pending Admin Review
-                          </span>
-                        ) : u.onboarding_state === 'APPROVED' ? (
-                          <span style={{ color: '#1b6d3f', fontWeight: 600 }}>
-                            Verified Artisan
-                          </span>
-                        ) : (
-                          <span style={{ opacity: 0.7 }}>{u.onboarding_state || 'BUYER'}</span>
-                        )}
-                      </td>
-                      <td style={{ padding: '0.55rem' }}>{u.account_status}</td>
-                    </tr>
+        {tab === 'overview' && (() => {
+          const roleDir = ov.role_directory || {};
+          const roleTabs = [
+            { id: 'buyers', label: 'Buyers (CUSTOMER)', data: roleDir.buyers },
+            { id: 'artisans', label: 'Artisans (DIRECT_SELLER)', data: roleDir.artisans },
+            { id: 'wholesale', label: 'Wholesale / Dealers', data: roleDir.wholesale },
+            { id: 'admins', label: 'Admins (ADMIN)', data: roleDir.admins }
+          ];
+          const searchQ = userSearch.trim().toLowerCase();
+          const matchesUserQuery = (u) => {
+            if (!searchQ) return true;
+            return [
+              u.name,
+              u.email,
+              u.phone,
+              u.store_name,
+              u.role_code,
+              u.user_id,
+              u.clerk_user_id,
+              u.verification_status,
+              u.account_status
+            ]
+              .filter(Boolean)
+              .join(' ')
+              .toLowerCase()
+              .includes(searchQ);
+          };
+
+          const combinedGroup = {
+            label: 'All Roles',
+            counts: {
+              registered: roleTabs.reduce((acc, rt) => acc + (rt.data?.counts?.registered ?? 0), 0),
+              logged_in: roleTabs.reduce((acc, rt) => acc + (rt.data?.counts?.logged_in ?? 0), 0),
+              never_logged_in: roleTabs.reduce((acc, rt) => acc + (rt.data?.counts?.never_logged_in ?? 0), 0),
+              total_login_events: roleTabs.reduce((acc, rt) => acc + (rt.data?.counts?.total_login_events ?? 0), 0)
+            },
+            registered: roleTabs.flatMap((rt) => rt.data?.registered || []),
+            logged_in: roleTabs.flatMap((rt) => rt.data?.logged_in || []),
+            never_logged_in: roleTabs.flatMap((rt) => rt.data?.never_logged_in || [])
+          };
+
+          const activeGroup =
+            roleFilter === 'all'
+              ? combinedGroup
+              : roleDir[roleFilter] || {
+                  label: 'Users',
+                  counts: { registered: 0, logged_in: 0, never_logged_in: 0, total_login_events: 0 },
+                  registered: [],
+                  logged_in: [],
+                  never_logged_in: []
+                };
+
+          const getRoleRowsForActivity = (group) =>
+            activityFilter === 'logged_in'
+              ? group?.logged_in || []
+              : activityFilter === 'never_logged_in'
+                ? group?.never_logged_in || []
+                : group?.registered || [];
+
+          const rawSelectedRows = getRoleRowsForActivity(activeGroup);
+          const selectedRows = rawSelectedRows.filter(matchesUserQuery);
+          const totalAllRoleMatches = searchQ
+            ? getRoleRowsForActivity(combinedGroup).filter(matchesUserQuery).length
+            : combinedGroup.counts.registered;
+
+          const roleCodeSetByFilter = {
+            buyers: new Set(['CUSTOMER']),
+            artisans: new Set(['DIRECT_SELLER']),
+            wholesale: new Set(['WHOLESALE_BUYER', 'DEALER', 'SUPPLIER']),
+            admins: new Set(['ADMIN'])
+          };
+          const filteredAuthEvents = (ov.recent_auth_events || []).filter((ev) => {
+            const allowed = roleFilter === 'all' ? null : roleCodeSetByFilter[roleFilter];
+            if (allowed && !allowed.has(ev.role_code)) return false;
+            if (!searchQ) return true;
+            return [ev.name, ev.email, ev.role_code, ev.auth_method, ev.ip_address, ev.user_id]
+              .filter(Boolean)
+              .join(' ')
+              .toLowerCase()
+              .includes(searchQ);
+          });
+
+          return (
+            <section className="fk-panel-card" style={{ padding: '1.25rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '1rem' }}>
+                <div>
+                  <h2 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                    <IconUsers size={18} /> Registered vs Logged-In Users by Role (Live DB)
+                  </h2>
+                  <p style={{ margin: '0.25rem 0 0', fontSize: '0.82rem', opacity: 0.76 }}>
+                    Separated directly from <code>users</code>, <code>user_role_assignments</code>, and{' '}
+                    <code>user_login_logs</code> with strict role isolation.
+                  </p>
+                </div>
+                <div style={{ fontSize: '0.82rem', fontWeight: 600, opacity: 0.85, textAlign: 'right' }}>
+                  <div>
+                    Total Logged-In Accounts: {ov.counts?.logged_in_users ?? 0} / {ov.counts?.users ?? 0}
+                  </div>
+                  {(ov.counts?.deactivated_users ?? 0) > 0 && (
+                    <div style={{ fontSize: '0.74rem', opacity: 0.72, fontWeight: 500 }}>
+                      Deleted / Anonymized Records Preserved for Orders &amp; Audit: {ov.counts.deactivated_users}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Search bar across users & roles */}
+              <div
+                style={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: '0.6rem',
+                  alignItems: 'center',
+                  marginBottom: '1rem'
+                }}
+              >
+                <div
+                  style={{
+                    position: 'relative',
+                    flex: '1 1 280px',
+                    display: 'flex',
+                    alignItems: 'center'
+                  }}
+                >
+                  <span
+                    style={{
+                      position: 'absolute',
+                      left: '0.75rem',
+                      display: 'inline-flex',
+                      opacity: 0.55,
+                      pointerEvents: 'none'
+                    }}
+                  >
+                    <IconSearchScan size={16} />
+                  </span>
+                  <input
+                    id="admin-user-search"
+                    type="search"
+                    className="up-input"
+                    aria-label="Search users by name, email, store name, phone, or ID"
+                    placeholder="Search user by name, email, store name, phone, or ID…"
+                    value={userSearch}
+                    onChange={(e) => setUserSearch(e.target.value)}
+                    style={{
+                      width: '100%',
+                      paddingLeft: '2.2rem',
+                      paddingRight: userSearch ? '2.2rem' : '0.85rem'
+                    }}
+                  />
+                  {userSearch && (
+                    <button
+                      type="button"
+                      aria-label="Clear search"
+                      onClick={() => setUserSearch('')}
+                      style={{
+                        position: 'absolute',
+                        right: '0.55rem',
+                        border: 'none',
+                        background: 'transparent',
+                        cursor: 'pointer',
+                        padding: '0.25rem',
+                        display: 'inline-flex',
+                        opacity: 0.65
+                      }}
+                    >
+                      <IconX size={14} />
+                    </button>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  className={roleFilter === 'all' ? 'btn-orange' : 'btn-orange-outline'}
+                  style={{ padding: '0.52rem 0.9rem', fontSize: '0.82rem', whiteSpace: 'nowrap' }}
+                  onClick={() => setRoleFilter(roleFilter === 'all' ? 'buyers' : 'all')}
+                >
+                  {roleFilter === 'all'
+                    ? `All Roles (${combinedGroup.counts.registered})`
+                    : `Search All Roles (${combinedGroup.counts.registered})`}
+                </button>
+              </div>
+
+              {/* Per-role summary cards */}
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(195px, 1fr))',
+                  gap: '0.75rem',
+                  marginBottom: '1.1rem'
+                }}
+              >
+                {roleTabs.map((rt) => {
+                  const counts = rt.data?.counts || { registered: 0, logged_in: 0, never_logged_in: 0 };
+                  const isActive = roleFilter === rt.id;
+                  const roleMatches = searchQ
+                    ? getRoleRowsForActivity(rt.data).filter(matchesUserQuery).length
+                    : null;
+                  return (
+                    <button
+                      key={rt.id}
+                      type="button"
+                      onClick={() => setRoleFilter(rt.id)}
+                      style={{
+                        textAlign: 'left',
+                        padding: '0.85rem 1rem',
+                        borderRadius: '10px',
+                        cursor: 'pointer',
+                        background: isActive ? 'rgba(20, 62, 48, 0.08)' : '#faf7f2',
+                        border: isActive ? '1.5px solid #143e30' : '1px solid rgba(0,0,0,0.1)'
+                      }}
+                    >
+                      <div style={{ fontSize: '0.75rem', fontWeight: 700, opacity: 0.75 }}>{rt.label}</div>
+                      <div style={{ display: 'flex', gap: '1rem', marginTop: '0.35rem', fontSize: '0.85rem' }}>
+                        <span><strong>{counts.registered}</strong> Registered</span>
+                        <span style={{ color: '#1b6d3f' }}><strong>{counts.logged_in}</strong> Logged In</span>
+                      </div>
+                      {roleMatches !== null && (
+                        <div
+                          style={{
+                            marginTop: '0.3rem',
+                            fontSize: '0.74rem',
+                            fontWeight: 700,
+                            color: roleMatches > 0 ? '#a34121' : 'rgba(0,0,0,0.45)'
+                          }}
+                        >
+                          {roleMatches} {roleMatches === 1 ? 'match' : 'matches'}
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Activity split selector */}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem', marginBottom: '1rem', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
+                  {[
+                    { id: 'registered', label: `All Registered (${activeGroup.counts?.registered ?? 0})` },
+                    { id: 'logged_in', label: `Logged-In Users (${activeGroup.counts?.logged_in ?? 0})` },
+                    { id: 'never_logged_in', label: `Registered Only / Never Logged In (${activeGroup.counts?.never_logged_in ?? 0})` },
+                    { id: 'events', label: `Login & Registration Logs (${filteredAuthEvents.length})` }
+                  ].map((f) => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      className={activityFilter === f.id ? 'btn-orange' : 'btn-orange-outline'}
+                      style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}
+                      onClick={() => setActivityFilter(f.id)}
+                    >
+                      {f.label}
+                    </button>
                   ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        )}
+                </div>
+                {searchQ && activityFilter !== 'events' && (
+                  <div style={{ fontSize: '0.8rem', opacity: 0.78 }}>
+                    Showing <strong>{selectedRows.length}</strong> of {rawSelectedRows.length} in{' '}
+                    <strong>{activeGroup.label}</strong>
+                  </div>
+                )}
+              </div>
+
+              {activityFilter === 'events' ? (
+                filteredAuthEvents.length === 0 ? (
+                  <p style={{ opacity: 0.7 }}>
+                    {searchQ
+                      ? `No login or registration logs matched "${userSearch.trim()}".`
+                      : 'No registration or login events recorded for this role yet.'}
+                  </p>
+                ) : (
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.86rem' }}>
+                      <thead>
+                        <tr style={{ textAlign: 'left', borderBottom: '1px solid rgba(0,0,0,0.1)' }}>
+                          <th style={{ padding: '0.55rem' }}>Event</th>
+                          <th style={{ padding: '0.55rem' }}>User</th>
+                          <th style={{ padding: '0.55rem' }}>Role</th>
+                          <th style={{ padding: '0.55rem' }}>Method</th>
+                          <th style={{ padding: '0.55rem' }}>IP</th>
+                          <th style={{ padding: '0.55rem' }}>Timestamp</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredAuthEvents.map((ev) => (
+                          <tr key={ev.id} style={{ borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
+                            <td style={{ padding: '0.55rem', fontWeight: 700 }}>
+                              <span
+                                style={{
+                                  padding: '0.16rem 0.5rem',
+                                  borderRadius: '999px',
+                                  fontSize: '0.72rem',
+                                  background: ev.auth_event_type === 'LOGIN' ? 'rgba(27,109,63,0.12)' : 'rgba(163,65,33,0.12)',
+                                  color: ev.auth_event_type === 'LOGIN' ? '#1b6d3f' : '#a34121'
+                                }}
+                              >
+                                {ev.auth_event_type}
+                              </span>
+                            </td>
+                            <td style={{ padding: '0.55rem' }}>
+                              <div style={{ fontWeight: 600 }}>{ev.name}</div>
+                              <div style={{ fontSize: '0.76rem', opacity: 0.75 }}>{ev.email}</div>
+                            </td>
+                            <td style={{ padding: '0.55rem', fontFamily: 'monospace', fontSize: '0.78rem' }}>{ev.role_code}</td>
+                            <td style={{ padding: '0.55rem', fontSize: '0.8rem' }}>{ev.auth_method}</td>
+                            <td style={{ padding: '0.55rem', fontFamily: 'monospace', fontSize: '0.76rem' }}>{ev.ip_address || '—'}</td>
+                            <td style={{ padding: '0.55rem', fontSize: '0.8rem' }}>
+                              {ev.created_at ? new Date(ev.created_at).toLocaleString() : '—'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )
+              ) : selectedRows.length === 0 ? (
+                <div style={{ padding: '0.5rem 0' }}>
+                  <p style={{ opacity: 0.72, marginBottom: searchQ && roleFilter !== 'all' && totalAllRoleMatches > 0 ? '0.6rem' : 0 }}>
+                    {searchQ
+                      ? `No users matched "${userSearch.trim()}" in ${activeGroup.label}.`
+                      : 'No users in this role & login status category yet.'}
+                  </p>
+                  {searchQ && roleFilter !== 'all' && totalAllRoleMatches > 0 && (
+                    <button
+                      type="button"
+                      className="btn-orange-outline"
+                      style={{ padding: '0.35rem 0.8rem', fontSize: '0.8rem' }}
+                      onClick={() => setRoleFilter('all')}
+                    >
+                      Show {totalAllRoleMatches} matching {totalAllRoleMatches === 1 ? 'user' : 'users'} across All Roles
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.87rem' }}>
+                    <thead>
+                      <tr style={{ textAlign: 'left', borderBottom: '1px solid rgba(0,0,0,0.1)' }}>
+                        <th style={{ padding: '0.55rem' }}>Name</th>
+                        <th style={{ padding: '0.55rem' }}>Email</th>
+                        <th style={{ padding: '0.55rem' }}>Role</th>
+                        <th style={{ padding: '0.55rem' }}>Login Status</th>
+                        <th style={{ padding: '0.55rem' }}>Last Login</th>
+                        <th style={{ padding: '0.55rem' }}>Registered</th>
+                        <th style={{ padding: '0.55rem' }}>Account</th>
+                        <th style={{ padding: '0.55rem' }}>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedRows.map((u) => (
+                        <tr key={`${u.user_id}-${u.role_code}`} style={{ borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
+                          <td style={{ padding: '0.55rem', fontWeight: 600 }}>
+                            <div>{u.name}</div>
+                            {u.store_name && (
+                              <div style={{ fontSize: '0.75rem', opacity: 0.75 }}>
+                                {u.store_name} ({u.verification_status})
+                              </div>
+                            )}
+                          </td>
+                          <td style={{ padding: '0.55rem' }}>{u.email}</td>
+                          <td style={{ padding: '0.55rem', fontFamily: 'monospace', fontSize: '0.76rem' }}>
+                            <div>{u.account_role || u.role_code}</div>
+                            {u.account_role && u.role_code && u.account_role !== u.role_code && (
+                              <div style={{ fontSize: '0.7rem', opacity: 0.68 }}>{u.role_code}</div>
+                            )}
+                          </td>
+                          <td style={{ padding: '0.55rem', fontSize: '0.78rem' }}>
+                            {u.has_logged_in ? (
+                              <span style={{ color: '#1b6d3f', fontWeight: 700 }}>
+                                Logged In ({u.login_count}x)
+                              </span>
+                            ) : (
+                              <span style={{ color: '#8a5300', fontWeight: 600 }}>
+                                Registered Only
+                              </span>
+                            )}
+                          </td>
+                          <td style={{ padding: '0.55rem', fontSize: '0.8rem' }}>
+                            {u.last_login_at ? new Date(u.last_login_at).toLocaleString() : 'Never'}
+                          </td>
+                          <td style={{ padding: '0.55rem', fontSize: '0.8rem' }}>
+                            {u.registered_at ? new Date(u.registered_at).toLocaleDateString() : '—'}
+                          </td>
+                          <td style={{ padding: '0.55rem' }}>{u.account_status}</td>
+                          <td style={{ padding: '0.55rem' }}>
+                            {u.role_code === 'ADMIN' ? (
+                              <span style={{ fontSize: '0.75rem', opacity: 0.6 }}>Protected</span>
+                            ) : (
+                              <button
+                                type="button"
+                                className="btn-orange-outline"
+                                style={{
+                                  padding: '0.28rem 0.6rem',
+                                  fontSize: '0.75rem',
+                                  borderColor: '#b33818',
+                                  color: '#b33818'
+                                }}
+                                disabled={busyDeleteUserId === u.user_id}
+                                onClick={() => {
+                                  setDeleteConfirmReason('');
+                                  setDeleteConfirmError('');
+                                  setDeleteConfirmUser(u);
+                                }}
+                              >
+                                Delete (DB + Clerk)
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+          );
+        })()}
 
         {tab === 'applications' && (
           <section className="fk-panel-card" style={{ padding: '1.25rem' }}>
@@ -699,47 +1100,41 @@ export default function AdminPage() {
                   <tr style={{ textAlign: 'left', borderBottom: '1px solid rgba(0,0,0,0.1)' }}>
                     <th style={{ padding: '0.55rem' }}>Admin Name</th>
                     <th style={{ padding: '0.55rem' }}>Authorized Email</th>
-                    <th style={{ padding: '0.55rem' }}>Stored Password Credential (DB Hash)</th>
+                    <th style={{ padding: '0.55rem' }}>Credential Protection</th>
                     <th style={{ padding: '0.55rem' }}>Status</th>
                     <th style={{ padding: '0.55rem' }}>Last Login</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {(ov.admin_credentials || []).map((a) => {
-                    const shown = Boolean(revealedHashes[a.id]);
-                    const maskedHash = a.password_hash
-                      ? `${a.password_hash.slice(0, 22)}••••••••••••`
-                      : '—';
-                    return (
-                      <tr key={a.id} style={{ borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
-                        <td style={{ padding: '0.55rem', fontWeight: 600 }}>{a.name}</td>
-                        <td style={{ padding: '0.55rem', fontWeight: 600 }}>{a.email}</td>
-                        <td style={{ padding: '0.55rem', fontFamily: 'monospace', fontSize: '0.76rem' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                            <span style={{ wordBreak: 'break-all' }}>
-                              {shown ? a.password_hash : maskedHash}
-                            </span>
-                            <button
-                              type="button"
-                              className="btn-orange-outline"
-                              style={{ padding: '0.2rem 0.5rem', fontSize: '0.72rem' }}
-                              onClick={() =>
-                                setRevealedHashes((prev) => ({ ...prev, [a.id]: !prev[a.id] }))
-                              }
-                            >
-                              {shown ? 'Hide Hash' : 'Show DB Hash'}
-                            </button>
-                          </div>
-                        </td>
-                        <td style={{ padding: '0.55rem', fontWeight: 600 }}>
-                          {a.is_active ? 'ACTIVE' : 'REVOKED'}
-                        </td>
-                        <td style={{ padding: '0.55rem', fontSize: '0.8rem' }}>
-                          {a.last_login_at ? new Date(a.last_login_at).toLocaleString() : 'Never'}
-                        </td>
-                      </tr>
-                    );
-                  })}
+                  {(ov.admin_credentials || []).map((a) => (
+                    <tr key={a.id} style={{ borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
+                      <td style={{ padding: '0.55rem', fontWeight: 600 }}>{a.name}</td>
+                      <td style={{ padding: '0.55rem', fontWeight: 600 }}>{a.email}</td>
+                      <td style={{ padding: '0.55rem', fontSize: '0.8rem' }}>
+                        <span
+                          style={{
+                            display: 'inline-block',
+                            padding: '0.18rem 0.55rem',
+                            borderRadius: '999px',
+                            background: 'rgba(11, 58, 38, 0.1)',
+                            color: '#0b3a26',
+                            fontWeight: 600,
+                            fontSize: '0.75rem'
+                          }}
+                        >
+                          {a.password_configured !== false
+                            ? `Configured (${a.hash_algorithm || 'PBKDF2-SHA256'})`
+                            : 'Not Configured'}
+                        </span>
+                      </td>
+                      <td style={{ padding: '0.55rem', fontWeight: 600 }}>
+                        {a.is_active ? 'ACTIVE' : 'REVOKED'}
+                      </td>
+                      <td style={{ padding: '0.55rem', fontSize: '0.8rem' }}>
+                        {a.last_login_at ? new Date(a.last_login_at).toLocaleString() : 'Never'}
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
@@ -750,9 +1145,55 @@ export default function AdminPage() {
           </section>
         )}
 
-        {tab === 'sellers' && (
+        {tab === 'sellers' && (() => {
+          const sq = sellerSearch.trim().toLowerCase();
+          const filteredSellers = (ov.sellers || []).filter((s) => {
+            if (!sq) return true;
+            return [s.store_name, s.workshop_district, s.craft_specialty, s.claimed_gi_code, s.verification_status, s.profile_status, s.id]
+              .filter(Boolean)
+              .join(' ')
+              .toLowerCase()
+              .includes(sq);
+          });
+          const filteredListings = (ov.listings || []).filter((l) => {
+            if (!sq) return true;
+            return [l.sku, l.title, l.status, l.id]
+              .filter(Boolean)
+              .join(' ')
+              .toLowerCase()
+              .includes(sq);
+          });
+
+          return (
           <section className="fk-panel-card" style={{ padding: '1.25rem' }}>
-            <h2 style={{ marginBottom: '0.9rem' }}>Artisan Profiles &amp; Listings (Live DB)</h2>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '0.95rem' }}>
+              <h2 style={{ margin: 0 }}>Artisan Profiles &amp; Listings (Live DB)</h2>
+              <div style={{ position: 'relative', minWidth: '260px', flex: '0 1 360px', display: 'flex', alignItems: 'center' }}>
+                <span style={{ position: 'absolute', left: '0.75rem', display: 'inline-flex', opacity: 0.55, pointerEvents: 'none' }}>
+                  <IconSearchScan size={16} />
+                </span>
+                <input
+                  id="admin-seller-search"
+                  type="search"
+                  className="up-input"
+                  aria-label="Search artisan workshops, districts, GI codes, or listing SKUs"
+                  placeholder="Search workshop, district, GI code, or SKU…"
+                  value={sellerSearch}
+                  onChange={(e) => setSellerSearch(e.target.value)}
+                  style={{ width: '100%', paddingLeft: '2.2rem', paddingRight: sellerSearch ? '2.2rem' : '0.85rem' }}
+                />
+                {sellerSearch && (
+                  <button
+                    type="button"
+                    aria-label="Clear artisan search"
+                    onClick={() => setSellerSearch('')}
+                    style={{ position: 'absolute', right: '0.55rem', border: 'none', background: 'transparent', cursor: 'pointer', padding: '0.25rem', display: 'inline-flex', opacity: 0.65 }}
+                  >
+                    <IconX size={14} />
+                  </button>
+                )}
+              </div>
+            </div>
             <div style={{ overflowX: 'auto', marginBottom: '1.5rem' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.88rem' }}>
                 <thead>
@@ -765,7 +1206,13 @@ export default function AdminPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {(ov.sellers || []).map((s) => (
+                  {filteredSellers.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} style={{ padding: '0.75rem 0.55rem', opacity: 0.7 }}>
+                        No artisan workshops matched &ldquo;{sellerSearch.trim()}&rdquo;.
+                      </td>
+                    </tr>
+                  ) : filteredSellers.map((s) => (
                     <tr key={s.id} style={{ borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
                       <td style={{ padding: '0.55rem', fontWeight: 600 }}>{s.store_name}</td>
                       <td style={{ padding: '0.55rem' }}>{s.workshop_district || '—'}</td>
@@ -813,7 +1260,13 @@ export default function AdminPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {(ov.listings || []).map((l) => (
+                  {filteredListings.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} style={{ padding: '0.75rem 0.55rem', opacity: 0.7 }}>
+                        No craft listings matched &ldquo;{sellerSearch.trim()}&rdquo;.
+                      </td>
+                    </tr>
+                  ) : filteredListings.map((l) => (
                     <tr key={l.id} style={{ borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
                       <td style={{ padding: '0.55rem', fontFamily: 'monospace' }}>{l.sku}</td>
                       <td style={{ padding: '0.55rem' }}>{l.title}</td>
@@ -859,7 +1312,8 @@ export default function AdminPage() {
               </table>
             </div>
           </section>
-        )}
+          );
+        })()}
 
         {tab === 'orders' && (
           <section className="fk-panel-card" style={{ padding: '1.25rem' }}>
@@ -1119,6 +1573,110 @@ export default function AdminPage() {
         )}
       </main>
 
+      {deleteConfirmUser && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 9999,
+            background: 'rgba(18, 16, 14, 0.72)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '1.25rem'
+          }}
+          onClick={() => {
+            if (!busyDeleteUserId) {
+              setDeleteConfirmUser(null);
+              setDeleteConfirmError('');
+            }
+          }}
+        >
+          <div
+            className="fk-panel-card"
+            style={{
+              maxWidth: '480px',
+              width: '100%',
+              padding: '1.35rem',
+              background: '#fff'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ marginTop: 0, color: '#9f2a0f' }}>
+              Delete User from DB &amp; Clerk?
+            </h3>
+            <p style={{ fontSize: '0.88rem', lineHeight: 1.5, marginBottom: '0.75rem' }}>
+              You are about to remove <strong>{deleteConfirmUser.name}</strong> (
+              <code>{deleteConfirmUser.email}</code>, role <code>{deleteConfirmUser.role_code}</code>).
+            </p>
+            <p style={{ fontSize: '0.82rem', opacity: 0.78, marginBottom: '0.9rem' }}>
+              This checks for active orders first, safely anonymizes/cleans MySQL records without
+              breaking order or audit integrity, frees their email for future registration, and{' '}
+              <strong>automatically deletes their account from Clerk</strong>.
+            </p>
+            <div style={{ marginBottom: '0.95rem' }}>
+              <label
+                htmlFor="admin-delete-reason"
+                style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, marginBottom: '0.3rem' }}
+              >
+                Audit Reason (optional)
+              </label>
+              <input
+                id="admin-delete-reason"
+                type="text"
+                className="up-input"
+                maxLength={300}
+                placeholder="e.g. Test account cleanup or user support request"
+                value={deleteConfirmReason}
+                disabled={Boolean(busyDeleteUserId)}
+                onChange={(e) => setDeleteConfirmReason(e.target.value)}
+              />
+            </div>
+            {deleteConfirmError && (
+              <div
+                role="alert"
+                style={{
+                  marginBottom: '0.95rem',
+                  padding: '0.65rem 0.8rem',
+                  borderRadius: '8px',
+                  background: '#fdf0ed',
+                  border: '1px solid rgba(179, 56, 24, 0.35)',
+                  color: '#9f2a0f',
+                  fontSize: '0.82rem',
+                  fontWeight: 600
+                }}
+              >
+                {deleteConfirmError}
+              </div>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem' }}>
+              <button
+                type="button"
+                className="btn-orange-outline"
+                disabled={Boolean(busyDeleteUserId)}
+                onClick={() => {
+                  setDeleteConfirmUser(null);
+                  setDeleteConfirmError('');
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-orange"
+                style={{ background: '#b33818', borderColor: '#b33818' }}
+                disabled={Boolean(busyDeleteUserId)}
+                onClick={handleConfirmDeleteUser}
+              >
+                {busyDeleteUserId ? 'Deleting…' : 'Confirm Delete (DB + Clerk)'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {cardPreviewModal && (
         <div
           role="dialog"
@@ -1164,14 +1722,37 @@ export default function AdminPage() {
 
             <div
               style={{
+                position: 'relative',
                 background: '#f7f4ee',
                 border: '1px solid rgba(0,0,0,0.1)',
                 borderRadius: '10px',
                 padding: '0.75rem',
                 textAlign: 'center',
-                marginBottom: '1rem'
+                marginBottom: '1rem',
+                overflow: 'hidden'
               }}
             >
+              <div
+                aria-hidden="true"
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  pointerEvents: 'none',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  transform: 'rotate(-22deg)',
+                  fontSize: '0.95rem',
+                  fontWeight: 800,
+                  letterSpacing: '0.08em',
+                  color: 'rgba(159, 42, 15, 0.22)',
+                  textTransform: 'uppercase',
+                  userSelect: 'none',
+                  zIndex: 2
+                }}
+              >
+                HunarLink Verification Review Only &bull; {authState.email || 'Admin'}
+              </div>
               {cardPreviewModal.mimeType === 'application/pdf' ? (
                 <iframe
                   title="Artisan Card PDF"

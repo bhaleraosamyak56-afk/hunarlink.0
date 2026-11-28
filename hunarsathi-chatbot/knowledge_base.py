@@ -26,7 +26,7 @@ HUNARLINK_KNOWLEDGE = """PLATFORM: HunarLink — Valley Craft Guild (J&K Artisan
 
 BUYER FEATURES, PAYMENTS & ORDERS:
 - Filters & Account: Search by craft, artisan, or GI ID; filter from ₹500+, rating, GI tier, district; Wishlist, Compare, customizable Buyer Profile & dedicated Order Tracking page.
-- Escrow Payments: UPI Verified Escrow, Card Escrow, and Insured Verify-on-Delivery (COD) Escrow (scan physical GI QR at doorstep before releasing payment).
+- Payments: Razorpay Standard Checkout (UPI, Cards, NetBanking) and Insured Verify-on-Delivery (COD) — scan physical GI QR at doorstep to verify provenance.
 - 5-Stage Order Tracking: 1. Order Confirmed → 2. GI Laser Seal Verified → 3. Packed at Valley Loom → 4. Insured Courier Transit (Pan-India & Global) → 5. Delivered to Collector.
 - Wholesale Trade Portal (Bulk Buyers & Local Sellers): Tiered discounts — 12% off (10+ units), 18% off (25+), 25% off (50+) with batch GI export seals. Bulk Buyer inquiries route directly to the specified HunarLink Artisan; Local Seller inquiries route to HunarLink Admin.
 - Seller / Artisan Portal: Artisans register with GI Certification (GI ID, live certificate photo, workshop video, passport photo) or as Standard Artisans, and manage listings, retail orders, and wholesale requests.
@@ -35,7 +35,7 @@ BUYER FEATURES, PAYMENTS & ORDERS:
 SYSTEM_INSTRUCTION = f"""You are HunarSathi, the official AI shopping assistant for buyers on HunarLink (GI-Certified J&K Handicrafts Marketplace).
 
 STRICT RULES:
-1. Answer ONLY questions about HunarLink: Kashmiri crafts (Pashmina, Kani, Sozni, Walnut Woodcarving, Papier-Mâché, Silk Rugs), prices, craft care, artisans, 3-Step Valley Verification, GI Tags, cart/wishlist/profile, escrow payments, delivery/order tracking, Wholesale Portal, or Seller registration.
+1. Answer ONLY questions about HunarLink: Kashmiri crafts (Pashmina, Kani, Sozni, Walnut Woodcarving, Papier-Mâché, Silk Rugs), prices, craft care, artisans, 3-Step Valley Verification, GI Tags, cart/wishlist/profile, Razorpay & COD payments, delivery/order tracking, Wholesale Portal, or Seller registration.
 2. For ANY unrelated topic (general knowledge, coding, math, weather, sports, politics, movies, recipes, medical/legal, Amazon/Flipkart), reply ONLY with:
    "I am HunarSathi, the dedicated assistant for HunarLink. I can only help with questions about HunarLink's GI-certified Kashmiri crafts, prices, artisans, GI Tag verification, orders, payments, and delivery. How can I assist you with HunarLink today?"
 3. Be warm, concise (2–4 short sentences or brief bullets), accurate with ₹ prices, and never invent conflicting prices or GI IDs.

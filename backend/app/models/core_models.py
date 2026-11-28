@@ -41,7 +41,9 @@ class User(Base):
     last_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     display_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
     preferred_currency: Mapped[str] = mapped_column(String(3), default="INR", nullable=False)
+    account_role: Mapped[str] = mapped_column(String(32), default="BUYER", nullable=False)
     account_status: Mapped[str] = mapped_column(String(32), default="ACTIVE", nullable=False)
+    last_login_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow, nullable=False)
 
@@ -64,6 +66,22 @@ class UserRoleAssignment(Base):
     platform_role_id: Mapped[str] = mapped_column(UUIDChar(), ForeignKey("platform_roles.id"), nullable=False)
     assignment_status: Mapped[str] = mapped_column(String(32), default="ACTIVE", nullable=False)
     granted_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, nullable=False)
+
+
+class UserLoginLog(Base):
+    """Per-role registration & sign-in audit trail (`REGISTER` vs `LOGIN`)."""
+
+    __tablename__ = "user_login_logs"
+
+    id: Mapped[str] = mapped_column(UUIDChar(), primary_key=True, default=new_uuid)
+    user_id: Mapped[str] = mapped_column(UUIDChar(), ForeignKey("users.id"), nullable=False)
+    role_code: Mapped[str] = mapped_column(String(50), nullable=False)
+    auth_event_type: Mapped[str] = mapped_column(String(24), nullable=False)  # REGISTER | LOGIN
+    auth_method: Mapped[str] = mapped_column(String(32), nullable=False)  # clerk_signup | clerk_signin | clerk_sync | admin_password
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, nullable=False)
 
 
@@ -844,3 +862,48 @@ class AuditLog(Base):
     ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
     user_agent: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, nullable=False)
+
+
+class ProductReview(Base):
+    """Customer/collector product reviews matching `sql/07_payments_shipping_returns_reviews.sql`."""
+
+    __tablename__ = "product_reviews"
+
+    id: Mapped[str] = mapped_column(UUIDChar(), primary_key=True, default=new_uuid)
+    product_id: Mapped[str] = mapped_column(UUIDChar(), ForeignKey("products.id"), nullable=False)
+    product_variant_id: Mapped[str | None] = mapped_column(UUIDChar(), ForeignKey("product_variants.id"), nullable=True)
+    seller_profile_id: Mapped[str | None] = mapped_column(UUIDChar(), ForeignKey("seller_profiles.id"), nullable=True)
+    reviewer_user_id: Mapped[str] = mapped_column(UUIDChar(), ForeignKey("users.id"), nullable=False)
+    retail_order_item_id: Mapped[str | None] = mapped_column(UUIDChar(), ForeignKey("retail_order_items.id"), nullable=True)
+    rating: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    title: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    review_body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_verified_purchase: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_anonymous: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    moderation_status: Mapped[str] = mapped_column(String(32), default="PUBLISHED", nullable=False)
+    seller_reply: Mapped[str | None] = mapped_column(Text, nullable=True)
+    seller_replied_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class UserConsent(Base):
+    """DPDP Act 2023 granular consent ledger (versioned, purpose-specific, withdrawable)."""
+
+    __tablename__ = "user_consents"
+    __table_args__ = (
+        UniqueConstraint("user_id", "consent_scope", name="uq_uc_user_scope"),
+    )
+
+    id: Mapped[str] = mapped_column(UUIDChar(), primary_key=True, default=new_uuid)
+    user_id: Mapped[str] = mapped_column(UUIDChar(), ForeignKey("users.id"), nullable=False)
+    consent_scope: Mapped[str] = mapped_column(String(64), nullable=False)
+    policy_version: Mapped[str] = mapped_column(String(32), default="2026-11-v1", nullable=False)
+    granted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    source_surface: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    ip_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    granted_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    withdrawn_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow, nullable=False)

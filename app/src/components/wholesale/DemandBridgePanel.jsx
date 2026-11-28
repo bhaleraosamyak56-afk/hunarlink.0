@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useClerkBridge } from '../../data/clerkConfig.js';
 import {
   dispatchDemandInquiries,
   matchDemandBridge,
@@ -19,6 +20,7 @@ const SAMPLE_BRIEFS = [
 const inr = (n) => '₹' + Number(n || 0).toLocaleString('en-IN');
 
 export default function DemandBridgePanel({ defaultBuyerName = '', defaultBuyerEmail = '', toast }) {
+  const { getToken, isSignedIn } = useClerkBridge();
   const [rawBrief, setRawBrief] = useState(SAMPLE_BRIEFS[0].text);
   const [parsed, setParsed] = useState(null);
   const [buyerName, setBuyerName] = useState(defaultBuyerName || '');
@@ -57,21 +59,25 @@ export default function DemandBridgePanel({ defaultBuyerName = '', defaultBuyerE
         reqStruct = pRes.structured_requirements;
         setParsed(reqStruct);
       }
-      const res = await matchDemandBridge({
-        raw_request_text: rawBrief.trim(),
-        buyer_name: buyerName.trim() || 'Bulk Sourcing Buyer',
-        buyer_email: buyerEmail.trim() || null,
-        category_slug: reqStruct.category_slug || null,
-        craft_technique: reqStruct.craft_technique || null,
-        requested_quantity: Number(reqStruct.requested_quantity || 25),
-        budget_min_inr: reqStruct.budget_min_inr ? Number(reqStruct.budget_min_inr) : null,
-        budget_max_inr: reqStruct.budget_max_inr ? Number(reqStruct.budget_max_inr) : null,
-        target_delivery_days: reqStruct.target_delivery_days ? Number(reqStruct.target_delivery_days) : 30,
-        preferred_district: reqStruct.preferred_district || null,
-        requires_verified_claims: Boolean(reqStruct.requires_verified_claims),
-        allow_cluster_pooling: reqStruct.allow_cluster_pooling !== false,
-        customization_notes: reqStruct.customization_notes || null
-      });
+      const token = isSignedIn && getToken ? await getToken() : null;
+      const res = await matchDemandBridge(
+        {
+          raw_request_text: rawBrief.trim(),
+          buyer_name: buyerName.trim() || 'Bulk Sourcing Buyer',
+          buyer_email: buyerEmail.trim() || null,
+          category_slug: reqStruct.category_slug || null,
+          craft_technique: reqStruct.craft_technique || null,
+          requested_quantity: Number(reqStruct.requested_quantity || 25),
+          budget_min_inr: reqStruct.budget_min_inr ? Number(reqStruct.budget_min_inr) : null,
+          budget_max_inr: reqStruct.budget_max_inr ? Number(reqStruct.budget_max_inr) : null,
+          target_delivery_days: reqStruct.target_delivery_days ? Number(reqStruct.target_delivery_days) : 30,
+          preferred_district: reqStruct.preferred_district || null,
+          requires_verified_claims: Boolean(reqStruct.requires_verified_claims),
+          allow_cluster_pooling: reqStruct.allow_cluster_pooling !== false,
+          customization_notes: reqStruct.customization_notes || null
+        },
+        token
+      );
       setMatchResult(res);
     } catch (err) {
       setError(err?.message || 'Could not match artisans.');
@@ -85,10 +91,15 @@ export default function DemandBridgePanel({ defaultBuyerName = '', defaultBuyerE
     setDispatching(true);
     setError('');
     try {
-      const res = await dispatchDemandInquiries(matchResult.demand_request_id, {
-        buyer_name: buyerName.trim() || 'Bulk Sourcing Buyer',
-        buyer_email: buyerEmail.trim() || null
-      });
+      const token = isSignedIn && getToken ? await getToken() : null;
+      const res = await dispatchDemandInquiries(
+        matchResult.demand_request_id,
+        {
+          buyer_name: buyerName.trim() || 'Bulk Sourcing Buyer',
+          buyer_email: buyerEmail.trim() || null
+        },
+        token
+      );
       setDispatchedInfo(res);
       if (toast) {
         toast(`Dispatched brief ${res.request_code} directly to ${res.contacted_count} verified artisan workshop(s)!`, 'success');

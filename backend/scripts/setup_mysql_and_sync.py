@@ -139,9 +139,12 @@ def install_mysql_schema(mysql_url: str) -> None:
     finally:
         conn.close()
 
-    # Ensure ASIGS guardrail tables + admin_credentials + alembic_version exist cleanly
+    # Ensure ASIGS guardrail tables + admin_credentials + account_role + views exist cleanly
     engine = create_engine(mysql_url, pool_pre_ping=True, future=True)
     Base.metadata.create_all(bind=engine, checkfirst=True)
+    from app.modules.auth.role_views import ensure_login_tracking_and_views
+
+    ensure_login_tracking_and_views(engine)
     with engine.begin() as c:
         c.execute(
             text(
@@ -153,7 +156,7 @@ def install_mysql_schema(mysql_url: str) -> None:
         c.execute(text("DELETE FROM alembic_version"))
         c.execute(
             text("INSERT INTO alembic_version (version_num) VALUES (:ver)"),
-            {"ver": "0003_add_admin_credentials"},
+            {"ver": "0006_add_users_account_role"},
         )
     inspector = inspect(engine)
     tables = inspector.get_table_names()

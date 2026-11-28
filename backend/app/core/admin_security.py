@@ -70,14 +70,14 @@ def verify_admin_password(plain_password: str, stored_hash: str) -> bool:
 def create_admin_session_token(
     *,
     user_id: str,
-    email: str,
+    email: str = "",
     settings: Settings,
 ) -> tuple[str, int]:
     now = datetime.now(timezone.utc)
     ttl = int(settings.admin_session_ttl_seconds)
+    # Keep PII (such as email) out of JWT payloads; DB lookup loads current email.
     payload = {
         "sub": user_id,
-        "email": email,
         "iss": ADMIN_JWT_ISSUER,
         "token_type": ADMIN_TOKEN_TYPE,
         "iat": int(now.timestamp()),

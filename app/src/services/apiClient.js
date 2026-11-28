@@ -101,6 +101,59 @@ export async function probeBackendHealth({ force = false } = {}) {
   return _cachedProbe;
 }
 
+export const SESSION_REVOKED_STORAGE_KEY = 'hunarlink_revoked_user';
+export const SESSION_EVENTS_CHANNEL = 'hunarlink_session_events';
+
+let _onAuthRevoked = null;
+
+export function setAuthRevokedHandler(handler) {
+  _onAuthRevoked = typeof handler === 'function' ? handler : null;
+}
+
+function _isUserAuthScopedPath(path) {
+  const clean = String(path || '');
+  if (clean.startsWith('/api/v1/auth/sync')) return false;
+  if (clean.startsWith('/api/v1/auth/admin-login')) return false;
+  if (clean.startsWith('/api/v1/admin/')) return false;
+  return true;
+}
+
+function _notifyAuthRevokedIfApplicable(path, token, status, detail) {
+  if (!token || !_onAuthRevoked || !_isUserAuthScopedPath(path)) return;
+  if (
+    status === 401 ||
+    (status === 403 && /not active|DEACTIVATED|SUSPENDED/i.test(String(detail || '')))
+  ) {
+    _onAuthRevoked({ status, detail, path });
+  }
+}
+
+export function broadcastSessionRevocation({ userId = null, clerkUserId = null, email = null } = {}) {
+  const payload = {
+    type: 'USER_DELETED',
+    userId: userId || null,
+    clerkUserId: clerkUserId || null,
+    email: email ? String(email).trim().toLowerCase() : null,
+    ts: Date.now()
+  };
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.setItem(SESSION_REVOKED_STORAGE_KEY, JSON.stringify(payload));
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    if (typeof BroadcastChannel !== 'undefined') {
+      const ch = new BroadcastChannel(SESSION_EVENTS_CHANNEL);
+      ch.postMessage(payload);
+      ch.close();
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 export async function apiRequest(path, { method = 'GET', body = undefined, token = null, isFormData = false } = {}) {
   const base = resolveApiBase();
   if (base === null) {
@@ -137,6 +190,7 @@ export async function apiRequest(path, { method = 'GET', body = undefined, token
     } else if (data?.detail?.issues?.[0]?.message) {
       detail = data.detail.issues[0].message;
     }
+    _notifyAuthRevokedIfApplicable(path, token, resp.status, detail);
     throw new ApiError(resp.status, detail, data);
   }
   return data;
@@ -154,6 +208,7 @@ export async function fetchProtectedBlobUrl(path, token) {
     const isJson = (resp.headers.get('content-type') || '').includes('application/json');
     const data = isJson ? await resp.json().catch(() => null) : null;
     const msg = typeof data?.detail === 'string' ? data.detail : `Could not load document (HTTP ${resp.status})`;
+    _notifyAuthRevokedIfApplicable(path, token, resp.status, msg);
     throw new ApiError(resp.status, msg, data);
   }
   const blob = await resp.blob();
@@ -168,15 +223,42 @@ export function syncAuthenticatedUser(payload, token) {
   return apiRequest('/api/v1/auth/sync', { method: 'POST', body: payload, token });
 }
 
-export function checkAuthAccount(email) {
+export function checkAuthAccount(email, requestedRole = null) {
+  const body = { email };
+  if (requestedRole) {
+    body.requested_role = requestedRole;
+  }
   return apiRequest('/api/v1/auth/check-account', {
     method: 'POST',
-    body: { email }
+    body
   });
 }
 
 export function fetchMyAuthProfile(token) {
   return apiRequest('/api/v1/auth/me', { token });
+}
+
+export function fetchMyConsents(token) {
+  return apiRequest('/api/v1/auth/consents', { token });
+}
+
+export function updateMyConsents(payload, token) {
+  return apiRequest('/api/v1/auth/consents', { method: 'PUT', body: payload, token });
+}
+
+export function exportMyPersonalData(token) {
+  return apiRequest('/api/v1/auth/me/export', { token });
+}
+
+export function deleteMyAccount(token, { currentPassword = null, reason = null } = {}) {
+  const body = {};
+  if (currentPassword) body.current_password = currentPassword;
+  if (reason) body.reason = reason;
+  return apiRequest('/api/v1/auth/me/delete', {
+    method: 'POST',
+    body,
+    token
+  });
 }
 
 export function submitArtisanVerification(payload, token) {
@@ -211,6 +293,20 @@ export function fetchCatalogProducts(categorySlug = null, token = null) {
 
 export function fetchCatalogProductById(productOrListingId, token = null) {
   return apiRequest(`/api/v1/catalog/product?id=${encodeURIComponent(productOrListingId)}`, { token });
+}
+
+export function fetchProductReviews(productOrListingId, token = null) {
+  return apiRequest(
+    `/api/v1/catalog/products/${encodeURIComponent(productOrListingId)}/reviews`,
+    { token }
+  );
+}
+
+export function createProductReview(productOrListingId, payload, token) {
+  return apiRequest(
+    `/api/v1/catalog/products/${encodeURIComponent(productOrListingId)}/reviews`,
+    { method: 'POST', body: payload, token }
+  );
 }
 
 export function fetchArtisans(token = null) {
@@ -325,6 +421,25 @@ export function adminPasswordLogin({ email, password }) {
 
 export function fetchAdminOverview(token) {
   return apiRequest('/api/v1/admin/overview', { token });
+}
+
+export function fetchAdminUsersByRole(token, { roleCode = null, activity = 'all', q = null } = {}) {
+  const params = new URLSearchParams();
+  if (roleCode) params.set('role_code', roleCode);
+  if (activity) params.set('activity', activity);
+  if (q && q.trim()) params.set('q', q.trim());
+  const qs = params.toString() ? `?${params.toString()}` : '';
+  return apiRequest(`/api/v1/admin/users-by-role${qs}`, { token });
+}
+
+export function deleteAdminUser(userId, { reason = null } = {}, token) {
+  const body = {};
+  if (reason) body.reason = reason;
+  return apiRequest(`/api/v1/admin/users/${encodeURIComponent(userId)}/delete`, {
+    method: 'POST',
+    body,
+    token
+  });
 }
 
 export function fetchAdminPayments(token, { orderScope = null, paymentStatus = null } = {}) {

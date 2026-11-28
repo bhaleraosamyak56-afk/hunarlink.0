@@ -30,6 +30,7 @@ from app.models.craftproof_models import (
     CraftVerificationEvent,
 )
 from app.models.guardrail_models import FileSecurityScan
+from app.modules.craftproof.qr import make_passport_serial
 from app.modules.craftproof.schemas import (
     AdminClaimDecisionIn,
     AttachEvidenceIn,
@@ -253,6 +254,7 @@ def ensure_passport_for_listing(
 
     passport_code = _make_passport_code(listing.id, listing.seller_sku)
     public_slug = f"{_slugify(product.slug or listing.listing_title)}-{passport_code[-6:].lower()}"
+    serial_number = make_passport_serial(passport_code, listing.id)
 
     origin_loc = (
         (custom_input.origin_location if custom_input and custom_input.origin_location else None)
@@ -296,6 +298,7 @@ def ensure_passport_for_listing(
         product_id=product.id,
         seller_profile_id=seller.id,
         public_slug=public_slug,
+        serial_number=serial_number,
         overall_trust_level="SELLER_DECLARED",
         materials_summary=materials,
         manufacturing_process=process,
@@ -598,8 +601,13 @@ def serialize_passport_public(
     passport: CraftPassport,
     *,
     api_prefix: str = "/api/v1",
+    signature_valid: bool | None = None,
+    include_qr_signature: str | None = None,
 ) -> dict[str, Any]:
     """Return full public Craft Passport clearly separating Verified Facts vs Artisan Declarations."""
+    serial_number = passport.serial_number or make_passport_serial(
+        passport.passport_code, passport.listing_id
+    )
     product = db.scalar(select(Product).where(Product.id == passport.product_id))
     listing = db.scalar(select(SellerProductListing).where(SellerProductListing.id == passport.listing_id))
     seller = db.scalar(select(SellerProfile).where(SellerProfile.id == passport.seller_profile_id))
@@ -688,12 +696,30 @@ def serialize_passport_public(
         origin_location=passport.origin_location,
     )
 
-    return {
+    payload_out = {
         "passport_id": passport.id,
         "passport_code": passport.passport_code,
+        "serial_number": serial_number,
         "public_slug": passport.public_slug,
         "public_url_path": f"/passport/{passport.passport_code}",
         "qr_svg_url": f"{api_prefix}/passports/{passport.passport_code}/qr.svg",
+        "scan_telemetry": {
+            "scan_count": int(getattr(passport, "scan_count", 0) or 0),
+            "first_scanned_at": (
+                passport.first_scanned_at.isoformat()
+                if getattr(passport, "first_scanned_at", None)
+                else None
+            ),
+        },
+        "qr_verification": {
+            "signature_checked": signature_valid is not None,
+            "signature_valid": signature_valid,
+            "status": (
+                "SIGNED_VALID"
+                if signature_valid is True
+                else ("SIGNATURE_MISMATCH" if signature_valid is False else "PUBLIC_LOOKUP")
+            ),
+        },
         "overall_trust_level": overall_trust,
         "trust_disclosure": (
             "This Digital Craft Passport explicitly separates Seller-Declared statements "
@@ -754,6 +780,12 @@ def serialize_passport_public(
         "created_at": passport.created_at.isoformat() if passport.created_at else None,
         "updated_at": passport.updated_at.isoformat() if passport.updated_at else None,
     }
+    if include_qr_signature:
+        payload_out["qr_signature"] = include_qr_signature
+        payload_out["signed_passport_url_path"] = (
+            f"/passport/{passport.passport_code}?sig={include_qr_signature}"
+        )
+    return payload_out
 
 
 def resolve_passport_by_code_or_slug(db: Session, code_or_slug: str) -> CraftPassport | None:
@@ -763,7 +795,6 @@ def resolve_passport_by_code_or_slug(db: Session, code_or_slug: str) -> CraftPas
             or_(
                 CraftPassport.passport_code == needle,
                 CraftPassport.public_slug == needle,
-                CraftPassport.id == needle,
             )
         )
     )

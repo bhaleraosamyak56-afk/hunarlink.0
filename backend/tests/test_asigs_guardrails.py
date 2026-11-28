@@ -761,3 +761,179 @@ def test_21_admin_guardrail_center_decision_and_audit(app_and_client, db_session
         json={"decision": "REJECT", "reason": "Attempting self decision on own case"},
     )
     assert self_dec.status_code == 403
+
+
+# 22. Prohibited goods (including 'desi daaru', drugs, weapons, shahtoosh) blocked cleanly
+def test_22_prohibited_goods_and_desi_daaru_blocked_across_endpoints(app_and_client, db_session):
+    from app.models.core_models import Product
+
+    app, client = app_and_client
+    entities = seed_marketplace_entities(db_session)
+    set_authenticated_principal(app, entities["seller_principal"])
+
+    before_products = len(db_session.scalars(select(Product)).all())
+
+    prohibited_samples = [
+        "desi daaru",
+        "Desi Daaru Special Bottle",
+        "desidaaru",
+        "d@aru",
+        "d a a r u",
+        "देसी दारू",
+        "دیسی شراب",
+        "Genuine Shahtoosh Shawl",
+        "Organic Ganja Pack",
+        "Handcrafted Pistol",
+    ]
+    for sample in prohibited_samples:
+        val_resp = client.post(
+            "/api/v1/seller/studio/validate",
+            json={
+                "title": sample,
+                "guild": "pashmina",
+                "description": "Test submission",
+                "selling_price": "1500",
+                "compare_at_mrp": "2000",
+            },
+        )
+        assert val_resp.status_code == 200, sample
+        vbody = val_resp.json()
+        assert vbody["outcome"] == "BLOCK", f"Expected BLOCK for {sample!r}, got {vbody}"
+        assert "INPUT_PROHIBITED_OR_ILLEGAL_GOODS" in vbody["triggered_rule_codes"]
+
+    # Studio publish returns 422 AND leaves zero orphan Product rows
+    pub_resp = client.post(
+        "/api/v1/seller/studio/listings",
+        json={
+            "title": "desi daaru",
+            "guild": "pashmina",
+            "description": "Pure village drink",
+            "selling_price": "450",
+            "compare_at_mrp": "600",
+        },
+    )
+    assert pub_resp.status_code == 422
+    assert "INPUT_PROHIBITED_OR_ILLEGAL_GOODS" in pub_resp.json()["detail"]["triggered_rule_codes"]
+    after_products = len(db_session.scalars(select(Product)).all())
+    assert after_products == before_products
+
+    # Prohibited word inside SKU or Studio metadata field is also blocked
+    meta_block = client.post(
+        "/api/v1/seller/studio/validate",
+        json={
+            "title": "Handwoven Kashmiri Stole",
+            "guild": "pashmina",
+            "technique": "desi daaru",
+            "selling_price": "2500",
+            "compare_at_mrp": "3000",
+            "seller_sku": "HL-DAARU-01",
+        },
+    )
+    assert meta_block.status_code == 200
+    assert meta_block.json()["outcome"] == "BLOCK"
+    assert "INPUT_PROHIBITED_OR_ILLEGAL_GOODS" in meta_block.json()["triggered_rule_codes"]
+
+
+# 23. Vulgar / abusive words across English, Hindi (Romanized & Devanagari), and Urdu blocked
+def test_23_multilingual_vulgarity_blocked_across_english_hindi_urdu_with_obfuscation(
+    app_and_client, db_session
+):
+    app, client = app_and_client
+    entities = seed_marketplace_entities(db_session)
+    set_authenticated_principal(app, entities["seller_principal"])
+
+    vulgar_samples = [
+        # English + obfuscation
+        "Handwoven Fucking Shawl",
+        "Bullshit Craft Box",
+        "f*ck this piece",
+        "f.u.c.k rug",
+        "f u c k vase",
+        # Romanized Hindi / Hinglish + obfuscation
+        "Bhosdike Carpet",
+        "m@d@rch0d Box",
+        "chut1ya craft",
+        "gaaaandu loom",
+        "Randi Special Vase",
+        # Devanagari Hindi (with & without nukta)
+        "मादरचोद शाल",
+        "भोसड़ीके कालीन",
+        "चूतिया बक्सा",
+        # Romanized Urdu
+        "Penchod Handmade Stole",
+        "Beghairat Carpet",
+        "Haramzada Box",
+        # Urdu / Perso-Arabic script
+        "حرامزادہ شال",
+        "بے غیرت قالین",
+        "کمینہ لکڑی",
+    ]
+    for sample in vulgar_samples:
+        resp = client.post(
+            "/api/v1/seller/studio/validate",
+            json={
+                "title": sample,
+                "guild": "pashmina",
+                "description": "Craft test",
+                "selling_price": "4500",
+                "compare_at_mrp": "5000",
+            },
+        )
+        assert resp.status_code == 200, sample
+        body = resp.json()
+        assert body["outcome"] == "BLOCK", f"Expected BLOCK for vulgar sample {sample!r}, got {body}"
+        assert "INPUT_VULGAR_OR_ABUSIVE_CONTENT" in body["triggered_rule_codes"]
+        # Error message must not echo back raw profanity
+        for err in body["field_errors"]:
+            assert "fuck" not in err["message"].lower()
+            assert "bhosdike" not in err["message"].lower()
+
+    # Artisan verification form also blocks vulgar / prohibited workshop names
+    ver_block = client.post(
+        "/api/v1/auth/artisan-verification",
+        json={
+            "store_name": "Desi Daaru Workshop",
+            "craft_specialty": "Pashmina",
+            "workshop_district": "Srinagar",
+            "verification_path": "GI",
+            "claimed_gi_code": "GI-JK-PASH-9999",
+        },
+    )
+    assert ver_block.status_code == 422
+
+
+# 24. Scunthorpe-safe verification: legitimate Kashmiri crafts, colors & surnames never false-positive
+def test_24_legitimate_craft_words_colors_and_kashmiri_surnames_never_false_positive(
+    app_and_client, db_session
+):
+    app, client = app_and_client
+    entities = seed_marketplace_entities(db_session)
+    set_authenticated_principal(app, entities["seller_principal"])
+
+    safe_samples = [
+        ("Wine Red Kani Pashmina Shawl", "Handwoven wine-colored pure wool shawl"),
+        ("Ivory Cream Sozni Stole", "Ivory base hand-embroidered stole"),
+        ("Peacock Motif Brass Lamp", "Classic brass table lamp with peacock engraving"),
+        ("Carved Walnut Knife Box", "Traditional walnut wood letter opener and knife box"),
+        ("Chikankari Glass Beaded Cushion", "Hand-stitched chikankari document folio"),
+        ("Dar & Butt Heritage Looms Scarf", "Winter sale heritage weave by Dar and Butt atelier"),
+        ("Natural Sheesham Wood Tray", "Handcrafted sheesham wood serving tray"),
+        ("کشمیر کانی پشمینہ شال — कश्मीर पश्मीना", "روایتی دستکاری اور خالص پشمینہ"),
+    ]
+    for title, desc in safe_samples:
+        resp = client.post(
+            "/api/v1/seller/studio/validate",
+            json={
+                "title": title,
+                "guild": "pashmina",
+                "description": desc,
+                "selling_price": "8500",
+                "compare_at_mrp": "9500",
+            },
+        )
+        assert resp.status_code == 200, title
+        body = resp.json()
+        assert "INPUT_VULGAR_OR_ABUSIVE_CONTENT" not in body["triggered_rule_codes"], title
+        assert "INPUT_PROHIBITED_OR_ILLEGAL_GOODS" not in body["triggered_rule_codes"], title
+        assert body["outcome"] == "PASS", f"Unexpected outcome for {title!r}: {body}"
+

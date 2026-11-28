@@ -110,7 +110,7 @@ def test_craft_passport_lifecycle_qr_and_human_only_verification(app_and_client,
 
 def test_demand_bridge_multi_artisan_cluster_pooling(app_and_client, db_session):
     app, client = app_and_client
-    seed_marketplace_entities(db_session)
+    entities = seed_marketplace_entities(db_session)
 
     # Seed 3 small walnut wood workshops whose individual capacities (35, 30, 25) cannot solo 85 units
     walnut_sellers = []
@@ -173,7 +173,18 @@ def test_demand_bridge_multi_artisan_cluster_pooling(app_and_client, db_session)
     assert parsed["requested_quantity"] == 85
     assert parsed["budget_max_inr"] == 2800
 
-    # Step 2: Deterministic Match -> MUST automatically form MULTI_ARTISAN_CLUSTER summing to 85 units!
+    # Step 2: Unauthenticated /match is blocked (401); authenticated buyer creates match + cluster
+    unauth_match = client.post(
+        "/api/v1/demand-bridge/match",
+        json={
+            "raw_request_text": "Need 85 hand-carved walnut jewelry boxes within 25 days, budget 2000-2800 INR",
+            "category_slug": "walnut-wood",
+            "requested_quantity": 85,
+        },
+    )
+    assert unauth_match.status_code == 401
+
+    set_authenticated_principal(app, entities["buyer_principal"])
     match_res = client.post(
         "/api/v1/demand-bridge/match",
         json={
@@ -198,7 +209,16 @@ def test_demand_bridge_multi_artisan_cluster_pooling(app_and_client, db_session)
     assert cluster["total_allocated_quantity"] == 85
     assert cluster["coverage_pct"] == 100.0
 
-    # Step 3: Dispatch inquiries to the entire cluster
+    # Cross-buyer IDOR check: another user cannot dispatch inquiries for this buyer's request
+    set_authenticated_principal(app, entities["other_principal"])
+    idor_disp = client.post(
+        f"/api/v1/demand-bridge/requests/{mdata['demand_request_id']}/dispatch-inquiries",
+        json={"buyer_name": "Hijacker", "buyer_email": "evil@example.com"},
+    )
+    assert idor_disp.status_code == 403
+
+    # Step 3: Owning buyer dispatches inquiries to the entire cluster
+    set_authenticated_principal(app, entities["buyer_principal"])
     disp_res = client.post(
         f"/api/v1/demand-bridge/requests/{mdata['demand_request_id']}/dispatch-inquiries",
         json={"buyer_name": "Taj Corporate Gifting", "buyer_email": "sourcing@tajdemo.in"},
@@ -214,6 +234,7 @@ def test_demand_bridge_multi_artisan_cluster_pooling(app_and_client, db_session)
     assert len(offers) == 1
     assert offers[0]["is_cluster_member"] is True
     assert offers[0]["allocated_quantity"] > 0
+    assert offers[0]["buyer_email"] == "s***@tajdemo.in"
 
     accept_res = client.post(
         f"/api/v1/seller/demand-bridge/offers/{offers[0]['match_id']}/respond",

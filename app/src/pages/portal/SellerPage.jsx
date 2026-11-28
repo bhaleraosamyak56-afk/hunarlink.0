@@ -305,13 +305,17 @@ export default function SellerPage() {
         {
           title: newForm.title || 'Untitled Craft',
           guild: newForm.guild || 'pashmina',
+          technique: (newForm.technique || '').trim() || null,
           description: newForm.description || '',
           selling_price: String(Math.max(1, Number(newForm.price) || 1)),
           compare_at_mrp: newForm.mrp ? String(Number(newForm.mrp)) : null,
           currency_code: 'INR',
           stock_quantity: Math.max(0, parseInt(newForm.stock, 10) || 1),
           min_order_qty: 1,
-          seller_sku: sku
+          seller_sku: sku,
+          dimensions: (newForm.dimensions || '').trim() || null,
+          origin_district: (newForm.district || seller?.district || 'Srinagar').trim(),
+          purity_metric: (newForm.purity || '').trim() || null
         },
         token
       );
@@ -745,8 +749,8 @@ export default function SellerPage() {
       shippingFee: 0,
       total: prod.price,
       artisanPayout: prod.price,
-      paymentMethod: 'UPI Verified Escrow',
-      paymentStatus: 'Paid (Escrow Protected)',
+      paymentMethod: 'Razorpay UPI Checkout',
+      paymentStatus: 'Paid (Razorpay Standard Checkout)',
       address: `${b.name}, ${b.locality}, ${b.city} - ${b.pincode}`,
       stage: 1,
       sellerNote: '',
@@ -1086,7 +1090,7 @@ export default function SellerPage() {
                               <strong>{formatINR(o.total)}</strong>
                             </div>
                             <div style={{ fontSize: '0.72rem', color: 'var(--text-500)', marginTop: '2px' }}>
-                              {o.date || 'Recent'} • {o.paymentMethod || 'Escrow'} • Stage: {stageLbl}
+                              {o.date || 'Recent'} • {o.paymentMethod || 'Razorpay Checkout'} • Stage: {stageLbl}
                             </div>
                           </div>
                           <button type="button" className="btn-forest" onClick={() => switchTab('orders')}>
@@ -1256,8 +1260,8 @@ export default function SellerPage() {
                   </div>
 
                   <div className="field-group full" style={{ marginTop: '16px' }}>
-                    <label className="field-label">Product Photograph (Select Preset or Upload Custom Photo) *</label>
-                    <div className="image-preset-grid" id="np-image-presets">
+                    <span className="field-label" id="np-photo-label">Product Photograph (Select Preset or Upload Custom Photo) *</span>
+                    <div className="image-preset-grid" id="np-image-presets" aria-labelledby="np-photo-label">
                       {IMAGE_PRESETS.map((p) => (
                         <button
                           type="button"
@@ -1359,10 +1363,25 @@ export default function SellerPage() {
                       <div style={{ marginTop: '10px', fontSize: '0.78rem', color: '#8f2424' }}>
                         <strong>Server Response (HTTP {asigsResult.status || '—'}):</strong> {asigsResult.error}
                         {asigsResult.status === 401 && ' — Sign in with Clerk to send a verified Bearer JWT.'}
+                        {Array.isArray(asigsResult.detail?.field_errors) && asigsResult.detail.field_errors.length > 0 && (
+                          <ul style={{ margin: '6px 0 0 18px', padding: 0 }}>
+                            {asigsResult.detail.field_errors.map((fe, idx) => (
+                              <li key={`${fe.rule_code}-${idx}`}>
+                                <code>{fe.rule_code}</code>: {fe.message}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
                       </div>
                     )}
                     {asigsResult?.response && (
-                      <div style={{ marginTop: '10px', fontSize: '0.78rem' }}>
+                      <div
+                        style={{
+                          marginTop: '10px',
+                          fontSize: '0.78rem',
+                          color: asigsResult.response.outcome === 'BLOCK' ? '#8f2424' : 'inherit'
+                        }}
+                      >
                         <strong>Outcome:</strong> <code>{asigsResult.response.outcome}</code>
                         {' · '}
                         <strong>Correlation ID:</strong> <code>{asigsResult.response.correlation_id}</code>
@@ -1370,6 +1389,24 @@ export default function SellerPage() {
                           <div style={{ marginTop: '4px' }}>
                             <strong>Rules:</strong> {asigsResult.response.triggered_rule_codes.join(', ')}
                           </div>
+                        )}
+                        {Array.isArray(asigsResult.response.field_errors) && asigsResult.response.field_errors.length > 0 && (
+                          <ul style={{ margin: '6px 0 0 18px', padding: 0 }}>
+                            {asigsResult.response.field_errors.map((fe, idx) => (
+                              <li key={`${fe.rule_code}-${idx}`}>
+                                <strong>{fe.field}:</strong> {fe.message}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        {Array.isArray(asigsResult.response.warnings) && asigsResult.response.warnings.length > 0 && (
+                          <ul style={{ margin: '6px 0 0 18px', padding: 0, color: '#7a5200' }}>
+                            {asigsResult.response.warnings.map((w, idx) => (
+                              <li key={`${w.rule_code}-${idx}`}>
+                                <strong>{w.field}:</strong> {w.message}
+                              </li>
+                            ))}
+                          </ul>
                         )}
                       </div>
                     )}
@@ -1611,8 +1648,8 @@ export default function SellerPage() {
                                   {i.giId ? ` • ${i.giId}` : ''}
                                 </div>
                               ))}
-                              <div className="oc-line">Method: {o.paymentMethod || 'UPI Verified Escrow'}</div>
-                              <div className="oc-line">Status: {o.paymentStatus || 'Paid (Escrow Protected)'}</div>
+                              <div className="oc-line">Method: {o.paymentMethod || 'Razorpay Standard Checkout'}</div>
+                              <div className="oc-line">Status: {o.paymentStatus || 'Paid (Razorpay Checkout)'}</div>
                               <div className="oc-line"><strong>Total: {formatINR(o.total)}</strong></div>
                               <div className="oc-line">Your payout: {formatINR(o.artisanPayout || o.total)}</div>
                             </div>
@@ -1874,7 +1911,7 @@ export default function SellerPage() {
                 </div>
 
                 <div className="field-group full" style={{ marginTop: '12px' }}>
-                  <label className="field-label">Update Product Photograph</label>
+                  <span className="field-label" id="edit-photo-label">Update Product Photograph</span>
                   <div className="custom-photo-upload-row" style={{ marginTop: '2px' }}>
                     <img id="edit-photo-preview" className="upload-preview-thumb" src={resolveImg(editImage)} alt="Current product photo" />
                     <label className="btn-outline" style={{ cursor: 'pointer' }}>Change Photo
