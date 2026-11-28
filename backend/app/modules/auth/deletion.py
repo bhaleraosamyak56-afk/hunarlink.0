@@ -440,6 +440,7 @@ def execute_user_deletion(
                 listing.updated_at = now
 
         anonymized_email = f"deleted+{user.id}@deleted.hunarlink.local"
+        user.account_role = "DEACTIVATED"
         user.account_status = "DEACTIVATED"
         user.suspended_reason = (reason or ("Self-deleted by user" if self_delete_mode else "Deleted by administrator")).strip()[:500]
         user.email = anonymized_email
@@ -467,6 +468,7 @@ def execute_user_deletion(
         )
         or str(uuid.uuid4()),
         new_values={
+            "account_role": "PURGED" if purged else "DEACTIVATED",
             "account_status": "PURGED" if purged else "DEACTIVATED",
             "purged": purged,
             "anonymized": anonymized,

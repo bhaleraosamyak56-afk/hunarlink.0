@@ -40,6 +40,8 @@ def main() -> None:
 
     summary = ensure_login_tracking_and_views(target_engine)
     print(f"Dialect: {summary['dialect']}")
+    print(f"users.account_role added: {summary['account_role_column_added']}")
+    print(f"users.account_role backfilled rows: {summary['account_roles_backfilled']}")
     print(f"users.last_login_at added: {summary['last_login_column_added']}")
     print(f"user_login_logs created: {summary['login_logs_table_created']}")
     print(f"MySQL views applied ({len(summary['views_applied'])}):")

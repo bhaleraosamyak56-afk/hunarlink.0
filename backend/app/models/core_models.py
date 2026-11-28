@@ -41,6 +41,7 @@ class User(Base):
     last_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     display_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
     preferred_currency: Mapped[str] = mapped_column(String(3), default="INR", nullable=False)
+    account_role: Mapped[str] = mapped_column(String(32), default="BUYER", nullable=False)
     account_status: Mapped[str] = mapped_column(String(32), default="ACTIVE", nullable=False)
     last_login_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, nullable=False)

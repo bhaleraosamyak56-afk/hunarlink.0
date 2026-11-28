@@ -1489,3 +1489,94 @@ def test_16_cli_purge_clean_user_and_orphaned_clerk_cleanup(
     assert cnt == 1
     assert "https://api.clerk.com/v1/users/user_orphan_clerk_99" in deleted_urls
 
+
+def test_17_users_table_account_role_and_backfill(
+    app_and_client, db_session
+):
+    from app.core.auth import AuthenticatedPrincipal
+    from app.modules.auth.role_views import backfill_users_account_role
+
+    app, client = app_and_client
+
+    # 1. Buyer signup stores account_role='BUYER' directly on `users`
+    _set_clerk_claims(app, {"sub": "user_root_role_buyer_01", "email": "root.buyer@example.com"})
+    res_b = client.post(
+        "/api/v1/auth/sync",
+        json={
+            "email": "root.buyer@example.com",
+            "email_verified": True,
+            "first_name": "Aarav",
+            "requested_role": "buyer",
+            "auth_mode": "signup",
+        },
+    )
+    assert res_b.status_code == 200
+    assert res_b.json()["account_role"] == "BUYER"
+    buyer_row = db_session.scalar(select(User).where(User.email == "root.buyer@example.com"))
+    assert buyer_row is not None
+    assert buyer_row.account_role == "BUYER"
+
+    chk_b = client.post(
+        "/api/v1/auth/check-account",
+        json={"email": "root.buyer@example.com", "requested_role": "buyer"},
+    )
+    assert chk_b.status_code == 200
+    assert chk_b.json()["account_role"] == "BUYER"
+
+    # 2. Artisan signup stores account_role='ARTISAN' directly on `users`
+    _set_clerk_claims(app, {"sub": "user_root_role_artisan_01", "email": "root.artisan@example.com"})
+    res_a = client.post(
+        "/api/v1/auth/sync",
+        json={
+            "email": "root.artisan@example.com",
+            "email_verified": True,
+            "first_name": "Farooq",
+            "requested_role": "artisan",
+            "auth_mode": "signup",
+        },
+    )
+    assert res_a.status_code == 200
+    assert res_a.json()["account_role"] == "ARTISAN"
+    artisan_row = db_session.scalar(select(User).where(User.email == "root.artisan@example.com"))
+    assert artisan_row is not None
+    assert artisan_row.account_role == "ARTISAN"
+
+    chk_a = client.post(
+        "/api/v1/auth/check-account",
+        json={"email": "root.artisan@example.com", "requested_role": "artisan"},
+    )
+    assert chk_a.status_code == 200
+    assert chk_a.json()["account_role"] == "ARTISAN"
+
+    # 3. Legacy backfill fixes stale account_role on existing rows from role assignments
+    artisan_row.account_role = "BUYER"
+    db_session.commit()
+    updated_count = backfill_users_account_role(db_session.get_bind())
+    assert updated_count >= 1
+    db_session.refresh(artisan_row)
+    assert artisan_row.account_role == "ARTISAN"
+
+    # 4. Self-deleting anonymized user sets account_role='DEACTIVATED'
+    set_authenticated_principal(
+        app,
+        AuthenticatedPrincipal(
+            user_id=artisan_row.id,
+            clerk_user_id=artisan_row.clerk_user_id,
+            email=artisan_row.email,
+            account_status="ACTIVE",
+            roles=frozenset({"DIRECT_SELLER"}),
+        ),
+    )
+    del_res = client.post(
+        "/api/v1/auth/me/delete",
+        json={"reason": "Done testing"},
+    )
+    assert del_res.status_code == 200
+    db_session.refresh(artisan_row)
+    assert artisan_row.account_status == "DEACTIVATED"
+    assert artisan_row.account_role == "DEACTIVATED"
+
+    _set_clerk_claims(app, None)
+    set_authenticated_principal(app, None)
+
+

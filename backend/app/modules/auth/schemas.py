@@ -38,6 +38,7 @@ class AccountCheckRequest(BaseModel):
 
 class AccountCheckResponse(BaseModel):
     exists: bool
+    account_role: str | None = None
     roles: list[str] = Field(default_factory=list)
     is_buyer: bool = False
     is_artisan: bool = False
@@ -78,6 +79,7 @@ class AuthUserProfileResponse(BaseModel):
     last_name: str | None = None
     display_name: str | None = None
     phone: str | None = None
+    account_role: str = "BUYER"
     account_status: str
     roles: list[str]
     is_artisan: bool = False

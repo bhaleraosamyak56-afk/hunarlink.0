@@ -17,6 +17,7 @@ ACTIVE_HTML_SCRIPT_RE = re.compile(
     re.IGNORECASE,
 )
 SKU_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{1,99}$")
+AUTO_GENERATED_STUDIO_SKU_RE = re.compile(r"^HL-[A-Z0-9]{2,8}-[0-9A-F]{6}$")
 GSTIN_RE = re.compile(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$")
 
 
@@ -88,7 +89,8 @@ def validate_sku(field: str, sku: str) -> list[FieldIssue]:
                 message="SKU must start with an alphanumeric character and use only letters, digits, '.', '_', or '-'.",
             )
         )
-    issues.extend(validate_content_policy(field, sku))
+    if not AUTO_GENERATED_STUDIO_SKU_RE.match(sku.strip()):
+        issues.extend(validate_content_policy(field, sku))
     return issues
 
 

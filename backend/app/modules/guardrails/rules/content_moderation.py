@@ -326,7 +326,7 @@ def _extract_roman_candidates(normalized: str) -> set[str]:
         ):
             continue
         deleet = raw.translate(LEET_TRANS)
-        alpha_only = re.sub(r"[^a-z]", "", deleet)
+        alpha_only = re.sub(r"[^a-z0-9]", "", deleet)
         if len(alpha_only) >= 3:
             candidates.add(alpha_only)
             candidates.add(_collapse_repeats_gt2(alpha_only))

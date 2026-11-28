@@ -49,6 +49,7 @@ from app.models.core_models import (
 )
 from app.models.guardrail_models import FileSecurityScan
 from app.modules.auth.deletion import execute_user_deletion, get_active_role_codes
+from app.modules.auth.role_views import derive_account_role
 from app.modules.guardrails.rules.input_validation import validate_safe_text
 from app.modules.guardrails.schemas import GuardrailOutcome
 from app.modules.auth.schemas import (
@@ -206,6 +207,12 @@ def _build_user_response(
         and seller.verification_status == "APPROVED"
         and seller.profile_status == "ACTIVE"
     )
+    resolved_account_role = user.account_role or derive_account_role(
+        role_codes,
+        account_status=user.account_status,
+        has_seller_profile=seller is not None,
+        is_admin=is_admin,
+    )
     return AuthUserProfileResponse(
         synced=True,
         is_new_user=is_new_user,
@@ -217,6 +224,7 @@ def _build_user_response(
         last_name=user.last_name,
         display_name=user.display_name,
         phone=user.phone,
+        account_role=resolved_account_role,
         account_status=user.account_status,
         roles=role_codes,
         is_artisan=is_artisan,
@@ -372,8 +380,15 @@ def check_existing_account(
         else:
             has_requested_role = True
 
+    resolved_account_role = derive_account_role(
+        role_codes,
+        account_status=user.account_status,
+        has_seller_profile=seller is not None,
+        is_admin=is_admin,
+    )
     return AccountCheckResponse(
         exists=True,
+        account_role=resolved_account_role,
         roles=role_codes,
         is_buyer=is_buyer,
         is_artisan=is_artisan,
@@ -437,6 +452,7 @@ def sync_authenticated_user(
         display_name = (payload.display_name or "").strip() or (
             f"{first_name} {last_name}".strip() if last_name else first_name
         )
+        account_role_val = "ARTISAN" if payload.requested_role == "artisan" else "BUYER"
         user = User(
             id=new_uuid(),
             clerk_user_id=clerk_user_id,
@@ -447,6 +463,7 @@ def sync_authenticated_user(
             last_name=last_name[:100] if last_name else None,
             display_name=display_name[:160],
             preferred_currency="INR",
+            account_role=account_role_val,
             account_status="ACTIVE",
             last_login_at=None,
         )
@@ -500,6 +517,7 @@ def sync_authenticated_user(
             user.phone = payload.phone.strip()[:32]
         if payload.email_verified:
             user.email_verified = True
+        user.account_role = "ARTISAN" if payload.requested_role == "artisan" else "BUYER"
         user.last_login_at = utcnow()
         user.updated_at = utcnow()
 
@@ -700,6 +718,7 @@ def submit_artisan_verification(
             detail="Standard Artisan registration requires uploading your Artisan Card image for Admin verification.",
         )
 
+    user.account_role = "ARTISAN"
     if payload.phone and payload.phone.strip():
         user.phone = payload.phone.strip()[:32]
         user.updated_at = utcnow()

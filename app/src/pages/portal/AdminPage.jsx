@@ -863,7 +863,10 @@ export default function AdminPage() {
                           </td>
                           <td style={{ padding: '0.55rem' }}>{u.email}</td>
                           <td style={{ padding: '0.55rem', fontFamily: 'monospace', fontSize: '0.76rem' }}>
-                            {u.role_code}
+                            <div>{u.account_role || u.role_code}</div>
+                            {u.account_role && u.role_code && u.account_role !== u.role_code && (
+                              <div style={{ fontSize: '0.7rem', opacity: 0.68 }}>{u.role_code}</div>
+                            )}
                           </td>
                           <td style={{ padding: '0.55rem', fontSize: '0.78rem' }}>
                             {u.has_logged_in ? (

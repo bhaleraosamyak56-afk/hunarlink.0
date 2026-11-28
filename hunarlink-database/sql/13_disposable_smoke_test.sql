@@ -15,8 +15,8 @@ SET SESSION time_zone = '+00:00';
 START TRANSACTION;
 
 -- 1. Create one test user + multi-role assignment (Customer + Direct Seller)
-INSERT INTO `users` (`id`, `clerk_user_id`, `email`, `first_name`, `last_name`, `account_status`)
-VALUES ('99999999-0000-4000-8000-000000000001', 'clerk_test_user_001', 'test.artisan@example.invalid', 'Test', 'Artisan', 'ACTIVE');
+INSERT INTO `users` (`id`, `clerk_user_id`, `email`, `first_name`, `last_name`, `account_role`, `account_status`)
+VALUES ('99999999-0000-4000-8000-000000000001', 'clerk_test_user_001', 'test.artisan@example.invalid', 'Test', 'Artisan', 'ARTISAN', 'ACTIVE');
 
 INSERT INTO `user_role_assignments` (`id`, `user_id`, `platform_role_id`, `assignment_status`, `granted_at`) VALUES
   ('99999999-0000-4000-8000-000000000011', '99999999-0000-4000-8000-000000000001', '10000000-0000-4000-8000-000000000001', 'ACTIVE', UTC_TIMESTAMP(6)),
@@ -43,10 +43,10 @@ INSERT INTO `seller_product_listings` (`id`, `seller_profile_id`, `product_id`, 
 VALUES ('99999999-0000-4000-8000-000000000032', '99999999-0000-4000-8000-000000000020', '99999999-0000-4000-8000-000000000030', '99999999-0000-4000-8000-000000000031', 'TS-PASH-01', 'TEST Direct Seller Pashmina', 9500.00, 12000.00, 'ACTIVE');
 
 -- 3. Create supplier & supplier lot
-INSERT INTO `users` (`id`, `clerk_user_id`, `email`, `first_name`, `account_status`) VALUES
-  ('99999999-0000-4000-8000-000000000002', 'clerk_test_supplier_002', 'test.supplier@example.invalid', 'TestSupplier', 'ACTIVE'),
-  ('99999999-0000-4000-8000-000000000003', 'clerk_test_dealer_003',   'test.dealer@example.invalid',   'TestDealer',   'ACTIVE'),
-  ('99999999-0000-4000-8000-000000000004', 'clerk_test_buyer_004',    'test.wsbuyer@example.invalid',  'TestWSBuyer',  'ACTIVE');
+INSERT INTO `users` (`id`, `clerk_user_id`, `email`, `first_name`, `account_role`, `account_status`) VALUES
+  ('99999999-0000-4000-8000-000000000002', 'clerk_test_supplier_002', 'test.supplier@example.invalid', 'TestSupplier', 'SUPPLIER', 'ACTIVE'),
+  ('99999999-0000-4000-8000-000000000003', 'clerk_test_dealer_003',   'test.dealer@example.invalid',   'TestDealer',   'DEALER',   'ACTIVE'),
+  ('99999999-0000-4000-8000-000000000004', 'clerk_test_buyer_004',    'test.wsbuyer@example.invalid',  'TestWSBuyer',  'WHOLESALE_BUYER', 'ACTIVE');
 
 INSERT INTO `supplier_profiles` (`id`, `user_id`, `supplier_name`, `profile_status`, `verification_status`)
 VALUES ('99999999-0000-4000-8000-000000000040', '99999999-0000-4000-8000-000000000002', 'TEST_Budgam_Weavers', 'ACTIVE', 'APPROVED');

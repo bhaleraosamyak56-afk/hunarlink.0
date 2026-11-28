@@ -911,6 +911,7 @@ def admin_live_overview(
             "name": u.display_name or f"{u.first_name} {u.last_name or ''}".strip(),
             "email": u.email,
             "phone": u.phone,
+            "account_role": u.account_role,
             "role_code": role_code,
             "account_status": u.account_status,
             "registered_at": u.created_at.isoformat(),
@@ -1122,6 +1123,7 @@ def admin_live_overview(
                 "email": u.email,
                 "name": u.display_name or f"{u.first_name} {u.last_name or ''}".strip(),
                 "phone": u.phone,
+                "account_role": u.account_role,
                 "roles": roles_by_user_id.get(u.id, []),
                 "onboarding_state": (
                     "ADMIN"
@@ -1229,6 +1231,7 @@ def admin_users_by_role(
                 item.get("email"),
                 item.get("phone"),
                 item.get("store_name"),
+                item.get("account_role"),
                 item.get("role_code"),
                 item.get("user_id"),
                 item.get("clerk_user_id"),

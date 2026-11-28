@@ -229,6 +229,8 @@ def create_user_with_roles(
     account_status: str = "ACTIVE",
     permissions: set[str] | None = None,
 ) -> tuple[User, AuthenticatedPrincipal]:
+    from app.modules.auth.role_views import derive_account_role
+
     parts = full_name.split(" ", 1)
     user = User(
         id=new_uuid(),
@@ -237,6 +239,7 @@ def create_user_with_roles(
         first_name=parts[0],
         last_name=parts[1] if len(parts) > 1 else None,
         display_name=full_name,
+        account_role=derive_account_role(roles, account_status=account_status),
         account_status=account_status,
     )
     db.add(user)
