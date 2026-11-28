@@ -24,6 +24,10 @@ def validate_seller_listing_product_rules(
 
     issues.extend(validate_safe_text("listing_title", payload.listing_title, required=True, min_len=3, max_len=220))
     issues.extend(validate_safe_text("description", payload.description, required=False, min_len=1, max_len=5000))
+    issues.extend(validate_safe_text("technique", payload.technique, required=False, min_len=1, max_len=120))
+    issues.extend(validate_safe_text("dimensions", payload.dimensions, required=False, min_len=1, max_len=160))
+    issues.extend(validate_safe_text("origin_district", payload.origin_district, required=False, min_len=1, max_len=100))
+    issues.extend(validate_safe_text("purity_metric", payload.purity_metric, required=False, min_len=1, max_len=255))
     issues.extend(validate_sku("seller_sku", payload.seller_sku))
 
     # Critical business invariant: sellers must NEVER directly mark a product GI_VERIFIED

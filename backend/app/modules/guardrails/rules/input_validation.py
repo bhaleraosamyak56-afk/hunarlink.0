@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 
+from app.modules.guardrails.rules.content_moderation import validate_content_policy
 from app.modules.guardrails.schemas import FieldIssue, GuardrailOutcome
 
 CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -71,20 +72,24 @@ def validate_safe_text(
             )
         )
 
+    issues.extend(validate_content_policy(field, value))
+
     return issues
 
 
 def validate_sku(field: str, sku: str) -> list[FieldIssue]:
+    issues: list[FieldIssue] = []
     if not SKU_RE.match(sku.strip()):
-        return [
+        issues.append(
             FieldIssue(
                 field=field,
                 rule_code="INPUT_INVALID_SKU",
                 severity=GuardrailOutcome.BLOCK,
                 message="SKU must start with an alphanumeric character and use only letters, digits, '.', '_', or '-'.",
             )
-        ]
-    return []
+        )
+    issues.extend(validate_content_policy(field, sku))
+    return issues
 
 
 def validate_optional_gstin(gstin: str | None) -> list[FieldIssue]:

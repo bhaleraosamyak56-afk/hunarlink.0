@@ -305,13 +305,17 @@ export default function SellerPage() {
         {
           title: newForm.title || 'Untitled Craft',
           guild: newForm.guild || 'pashmina',
+          technique: (newForm.technique || '').trim() || null,
           description: newForm.description || '',
           selling_price: String(Math.max(1, Number(newForm.price) || 1)),
           compare_at_mrp: newForm.mrp ? String(Number(newForm.mrp)) : null,
           currency_code: 'INR',
           stock_quantity: Math.max(0, parseInt(newForm.stock, 10) || 1),
           min_order_qty: 1,
-          seller_sku: sku
+          seller_sku: sku,
+          dimensions: (newForm.dimensions || '').trim() || null,
+          origin_district: (newForm.district || seller?.district || 'Srinagar').trim(),
+          purity_metric: (newForm.purity || '').trim() || null
         },
         token
       );
@@ -1359,10 +1363,25 @@ export default function SellerPage() {
                       <div style={{ marginTop: '10px', fontSize: '0.78rem', color: '#8f2424' }}>
                         <strong>Server Response (HTTP {asigsResult.status || '—'}):</strong> {asigsResult.error}
                         {asigsResult.status === 401 && ' — Sign in with Clerk to send a verified Bearer JWT.'}
+                        {Array.isArray(asigsResult.detail?.field_errors) && asigsResult.detail.field_errors.length > 0 && (
+                          <ul style={{ margin: '6px 0 0 18px', padding: 0 }}>
+                            {asigsResult.detail.field_errors.map((fe, idx) => (
+                              <li key={`${fe.rule_code}-${idx}`}>
+                                <code>{fe.rule_code}</code>: {fe.message}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
                       </div>
                     )}
                     {asigsResult?.response && (
-                      <div style={{ marginTop: '10px', fontSize: '0.78rem' }}>
+                      <div
+                        style={{
+                          marginTop: '10px',
+                          fontSize: '0.78rem',
+                          color: asigsResult.response.outcome === 'BLOCK' ? '#8f2424' : 'inherit'
+                        }}
+                      >
                         <strong>Outcome:</strong> <code>{asigsResult.response.outcome}</code>
                         {' · '}
                         <strong>Correlation ID:</strong> <code>{asigsResult.response.correlation_id}</code>
@@ -1370,6 +1389,24 @@ export default function SellerPage() {
                           <div style={{ marginTop: '4px' }}>
                             <strong>Rules:</strong> {asigsResult.response.triggered_rule_codes.join(', ')}
                           </div>
+                        )}
+                        {Array.isArray(asigsResult.response.field_errors) && asigsResult.response.field_errors.length > 0 && (
+                          <ul style={{ margin: '6px 0 0 18px', padding: 0 }}>
+                            {asigsResult.response.field_errors.map((fe, idx) => (
+                              <li key={`${fe.rule_code}-${idx}`}>
+                                <strong>{fe.field}:</strong> {fe.message}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        {Array.isArray(asigsResult.response.warnings) && asigsResult.response.warnings.length > 0 && (
+                          <ul style={{ margin: '6px 0 0 18px', padding: 0, color: '#7a5200' }}>
+                            {asigsResult.response.warnings.map((w, idx) => (
+                              <li key={`${w.rule_code}-${idx}`}>
+                                <strong>{w.field}:</strong> {w.message}
+                              </li>
+                            ))}
+                          </ul>
                         )}
                       </div>
                     )}

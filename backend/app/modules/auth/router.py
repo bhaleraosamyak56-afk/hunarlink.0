@@ -49,6 +49,8 @@ from app.models.core_models import (
 )
 from app.models.guardrail_models import FileSecurityScan
 from app.modules.auth.deletion import execute_user_deletion, get_active_role_codes
+from app.modules.guardrails.rules.input_validation import validate_safe_text
+from app.modules.guardrails.schemas import GuardrailOutcome
 from app.modules.auth.schemas import (
     AccountCheckRequest,
     AccountCheckResponse,
@@ -657,6 +659,20 @@ def submit_artisan_verification(
     claimed_gi = (payload.claimed_gi_code or "").strip() or None
     card_scan_id = (payload.artisan_card_scan_id or "").strip() or None
 
+    ver_issues = [
+        *validate_safe_text("store_name", payload.store_name, required=True, min_len=2, max_len=160),
+        *validate_safe_text("craft_specialty", payload.craft_specialty, required=True, min_len=2, max_len=160),
+        *validate_safe_text("workshop_district", payload.workshop_district, required=True, min_len=2, max_len=120),
+        *validate_safe_text("skill_description", payload.skill_description, required=False, min_len=1, max_len=1000),
+        *validate_safe_text("claimed_gi_code", claimed_gi, required=False, min_len=1, max_len=64),
+    ]
+    ver_blocks = [i for i in ver_issues if i.severity == GuardrailOutcome.BLOCK]
+    if ver_blocks:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=ver_blocks[0].message,
+        )
+
     if normalized_path == "GI" and not claimed_gi:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -830,6 +846,19 @@ def create_my_address(
     principal: AuthenticatedPrincipal = Depends(get_current_principal),
     db: Session = Depends(get_db),
 ) -> UserAddressResponse:
+    addr_issues = [
+        *validate_safe_text("recipient_name", payload.recipient_name, required=True, min_len=2, max_len=160),
+        *validate_safe_text("line1", payload.line1, required=True, min_len=2, max_len=255),
+        *validate_safe_text("line2", payload.line2, required=False, min_len=1, max_len=255),
+        *validate_safe_text("city", payload.city, required=True, min_len=2, max_len=120),
+        *validate_safe_text("state_province", payload.state_province, required=True, min_len=2, max_len=120),
+    ]
+    addr_blocks = [i for i in addr_issues if i.severity == GuardrailOutcome.BLOCK]
+    if addr_blocks:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=addr_blocks[0].message,
+        )
     existing = db.scalars(
         select(UserAddress).where(
             UserAddress.user_id == principal.user_id,
