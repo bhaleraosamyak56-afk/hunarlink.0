@@ -109,7 +109,7 @@ export default function HeroSection() {
               <span className="cr-sep" aria-hidden="true">
                 &#9670;
               </span>
-              <b>Escrow Protected</b>
+              <b>Razorpay Protected</b>
               <span className="cr-sep" aria-hidden="true">
                 &#9670;
               </span>

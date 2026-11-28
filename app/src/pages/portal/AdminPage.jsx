@@ -94,7 +94,6 @@ export default function AdminPage() {
   const [userSearch, setUserSearch] = useState('');
   const [sellerSearch, setSellerSearch] = useState('');
   const [loading, setLoading] = useState(false);
-  const [revealedHashes, setRevealedHashes] = useState({});
   const [cardPreviewModal, setCardPreviewModal] = useState(null);
   const [busyAppId, setBusyAppId] = useState(null);
   const [deleteConfirmUser, setDeleteConfirmUser] = useState(null);
@@ -1101,47 +1100,41 @@ export default function AdminPage() {
                   <tr style={{ textAlign: 'left', borderBottom: '1px solid rgba(0,0,0,0.1)' }}>
                     <th style={{ padding: '0.55rem' }}>Admin Name</th>
                     <th style={{ padding: '0.55rem' }}>Authorized Email</th>
-                    <th style={{ padding: '0.55rem' }}>Stored Password Credential (DB Hash)</th>
+                    <th style={{ padding: '0.55rem' }}>Credential Protection</th>
                     <th style={{ padding: '0.55rem' }}>Status</th>
                     <th style={{ padding: '0.55rem' }}>Last Login</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {(ov.admin_credentials || []).map((a) => {
-                    const shown = Boolean(revealedHashes[a.id]);
-                    const maskedHash = a.password_hash
-                      ? `${a.password_hash.slice(0, 22)}••••••••••••`
-                      : '—';
-                    return (
-                      <tr key={a.id} style={{ borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
-                        <td style={{ padding: '0.55rem', fontWeight: 600 }}>{a.name}</td>
-                        <td style={{ padding: '0.55rem', fontWeight: 600 }}>{a.email}</td>
-                        <td style={{ padding: '0.55rem', fontFamily: 'monospace', fontSize: '0.76rem' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                            <span style={{ wordBreak: 'break-all' }}>
-                              {shown ? a.password_hash : maskedHash}
-                            </span>
-                            <button
-                              type="button"
-                              className="btn-orange-outline"
-                              style={{ padding: '0.2rem 0.5rem', fontSize: '0.72rem' }}
-                              onClick={() =>
-                                setRevealedHashes((prev) => ({ ...prev, [a.id]: !prev[a.id] }))
-                              }
-                            >
-                              {shown ? 'Hide Hash' : 'Show DB Hash'}
-                            </button>
-                          </div>
-                        </td>
-                        <td style={{ padding: '0.55rem', fontWeight: 600 }}>
-                          {a.is_active ? 'ACTIVE' : 'REVOKED'}
-                        </td>
-                        <td style={{ padding: '0.55rem', fontSize: '0.8rem' }}>
-                          {a.last_login_at ? new Date(a.last_login_at).toLocaleString() : 'Never'}
-                        </td>
-                      </tr>
-                    );
-                  })}
+                  {(ov.admin_credentials || []).map((a) => (
+                    <tr key={a.id} style={{ borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
+                      <td style={{ padding: '0.55rem', fontWeight: 600 }}>{a.name}</td>
+                      <td style={{ padding: '0.55rem', fontWeight: 600 }}>{a.email}</td>
+                      <td style={{ padding: '0.55rem', fontSize: '0.8rem' }}>
+                        <span
+                          style={{
+                            display: 'inline-block',
+                            padding: '0.18rem 0.55rem',
+                            borderRadius: '999px',
+                            background: 'rgba(11, 58, 38, 0.1)',
+                            color: '#0b3a26',
+                            fontWeight: 600,
+                            fontSize: '0.75rem'
+                          }}
+                        >
+                          {a.password_configured !== false
+                            ? `Configured (${a.hash_algorithm || 'PBKDF2-SHA256'})`
+                            : 'Not Configured'}
+                        </span>
+                      </td>
+                      <td style={{ padding: '0.55rem', fontWeight: 600 }}>
+                        {a.is_active ? 'ACTIVE' : 'REVOKED'}
+                      </td>
+                      <td style={{ padding: '0.55rem', fontSize: '0.8rem' }}>
+                        {a.last_login_at ? new Date(a.last_login_at).toLocaleString() : 'Never'}
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
@@ -1729,14 +1722,37 @@ export default function AdminPage() {
 
             <div
               style={{
+                position: 'relative',
                 background: '#f7f4ee',
                 border: '1px solid rgba(0,0,0,0.1)',
                 borderRadius: '10px',
                 padding: '0.75rem',
                 textAlign: 'center',
-                marginBottom: '1rem'
+                marginBottom: '1rem',
+                overflow: 'hidden'
               }}
             >
+              <div
+                aria-hidden="true"
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  pointerEvents: 'none',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  transform: 'rotate(-22deg)',
+                  fontSize: '0.95rem',
+                  fontWeight: 800,
+                  letterSpacing: '0.08em',
+                  color: 'rgba(159, 42, 15, 0.22)',
+                  textTransform: 'uppercase',
+                  userSelect: 'none',
+                  zIndex: 2
+                }}
+              >
+                HunarLink Verification Review Only &bull; {authState.email || 'Admin'}
+              </div>
               {cardPreviewModal.mimeType === 'application/pdf' ? (
                 <iframe
                   title="Artisan Card PDF"

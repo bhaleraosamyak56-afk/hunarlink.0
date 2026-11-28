@@ -128,6 +128,7 @@ export default function ProductPage() {
   const [reviewTitle, setReviewTitle] = useState('');
   const [reviewCity, setReviewCity] = useState(buyerProfile?.city || '');
   const [reviewBody, setReviewBody] = useState('');
+  const [reviewAnonymous, setReviewAnonymous] = useState(false);
   const [reviewError, setReviewError] = useState('');
   const [submittingReview, setSubmittingReview] = useState(false);
 
@@ -292,7 +293,8 @@ export default function ProductPage() {
             rating: reviewRating,
             title: reviewTitle.trim() || null,
             review_body: bodyText,
-            author_city: reviewCity.trim() || null
+            author_city: reviewAnonymous ? null : reviewCity.trim() || null,
+            is_anonymous: reviewAnonymous
           },
           token
         );
@@ -301,12 +303,14 @@ export default function ProductPage() {
         addReview(product.id, {
           stars: reviewRating,
           title: reviewTitle.trim(),
-          city: reviewCity.trim() || 'India',
+          city: reviewAnonymous ? 'India' : reviewCity.trim() || 'India',
+          author: reviewAnonymous ? 'Anonymous Collector' : undefined,
           text: bodyText
         });
       }
       setReviewTitle('');
       setReviewBody('');
+      setReviewAnonymous(false);
       setReviewRating(5);
       setReviewFormOpen(false);
       toast('Thank you — your review is now published.', 'success');
@@ -532,7 +536,7 @@ export default function ProductPage() {
               </div>
               <div className="pdp-trust-tile">
                 <div className="pdp-trust-tile-icon"><IconShield size={14} /></div>
-                <div className="pdp-trust-tile-title">Sovereign Escrow</div>
+                <div className="pdp-trust-tile-title">Razorpay Protected</div>
                 <div className="pdp-trust-tile-desc">Protected Payment</div>
               </div>
             </div>
@@ -720,6 +724,26 @@ export default function ProductPage() {
                         onChange={(e) => setReviewBody(e.target.value)}
                       />
                     </div>
+
+                    <label
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        fontSize: '0.82rem',
+                        color: '#2E3D34',
+                        margin: '4px 0 10px',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        id="pdp-review-anonymous-toggle"
+                        checked={reviewAnonymous}
+                        onChange={(e) => setReviewAnonymous(e.target.checked)}
+                      />
+                      <span>Post anonymously as &ldquo;Anonymous Collector&rdquo; (hides your name &amp; city)</span>
+                    </label>
 
                     {reviewError && <div className="pdp-review-error">{reviewError}</div>}
 

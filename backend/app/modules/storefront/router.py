@@ -77,6 +77,22 @@ router = APIRouter(tags=["Storefront, Artisans & Retail Orders"])
 # Rate limiters for public lookup endpoints against UUID/slug enumeration
 artisan_lookup_rate_limiter = SlidingWindowRateLimiter(max_requests=120, window_seconds=60)
 product_lookup_rate_limiter = SlidingWindowRateLimiter(max_requests=180, window_seconds=60)
+review_write_rate_limiter = SlidingWindowRateLimiter(max_requests=10, window_seconds=300)
+
+_EMAIL_PII_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
+_PHONE_PII_RE = re.compile(r"(?<!\d)(?:\+91[\s\-]?)?[6-9]\d{4}[\s\-]?\d{5}(?!\d)")
+_AADHAAR_PII_RE = re.compile(r"(?<!\d)\d{4}[\s\-]?\d{4}[\s\-]?\d{4}(?!\d)")
+_PAN_PII_RE = re.compile(r"\b[A-Z]{5}\d{4}[A-Z]\b")
+
+
+def _scrub_review_pii(text: str | None) -> str | None:
+    if not text:
+        return text
+    cleaned = _EMAIL_PII_RE.sub("[redacted-email]", text)
+    cleaned = _PHONE_PII_RE.sub("[redacted-phone]", cleaned)
+    cleaned = _AADHAAR_PII_RE.sub("[redacted-id]", cleaned)
+    cleaned = _PAN_PII_RE.sub("[redacted-id]", cleaned)
+    return cleaned
 
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
 _SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,178}[a-z0-9])?$")
@@ -469,22 +485,28 @@ def _compute_product_reviews_summary(
 
     items: list[ProductReviewItem] = []
     for rev, reviewer in db_rows:
+        anon = bool(getattr(rev, "is_anonymous", False))
         display_name = (
-            reviewer.display_name
-            or f"{reviewer.first_name} {reviewer.last_name or ''}".strip()
-            or "Verified Collector"
+            "Anonymous Collector"
+            if anon
+            else (
+                reviewer.display_name
+                or f"{reviewer.first_name} {reviewer.last_name or ''}".strip()
+                or "Verified Collector"
+            )
         )
         items.append(
             ProductReviewItem(
                 id=rev.id,
                 product_id=rev.product_id,
                 author_name=display_name,
-                author_city=city_by_user_id.get(reviewer.id, "India"),
+                author_city="India" if anon else city_by_user_id.get(reviewer.id, "India"),
+                is_anonymous=anon,
                 rating=int(rev.rating),
-                title=rev.title,
-                review_body=rev.review_body or "",
+                title=_scrub_review_pii(rev.title),
+                review_body=_scrub_review_pii(rev.review_body) or "",
                 is_verified_purchase=bool(rev.is_verified_purchase),
-                seller_reply=rev.seller_reply,
+                seller_reply=_scrub_review_pii(rev.seller_reply),
                 seller_replied_at=rev.seller_replied_at,
                 created_at=rev.created_at,
                 source="database",
@@ -598,15 +620,24 @@ def create_product_review(
     identifier: str,
     payload: CreateProductReviewRequest,
     request: Request,
+    response: Response,
     principal: AuthenticatedPrincipal = Depends(get_current_principal),
     db: Session = Depends(get_db),
 ) -> ProductReviewItem:
     """Persist an authenticated buyer/collector review in `product_reviews` with ASIGS guardrails."""
+    allowed, retry_after = review_write_rate_limiter.allow(f"rev:{principal.user_id}")
+    if not allowed:
+        response.headers["Retry-After"] = str(retry_after)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Review submission rate limit exceeded. Please wait before posting another review.",
+        )
+
     listing, product, _category, seller, _artisan_user = _resolve_active_catalog_row(db, identifier)
     ProductReview.__table__.create(bind=db.get_bind(), checkfirst=True)
 
-    clean_title = (payload.title or "").strip() or None
-    clean_body = payload.review_body.strip()
+    clean_title = _scrub_review_pii((payload.title or "").strip()) or None
+    clean_body = _scrub_review_pii(payload.review_body.strip()) or ""
     clean_city = (payload.author_city or "").strip() or None
 
     issues = [
@@ -668,6 +699,7 @@ def create_product_review(
         title=clean_title,
         review_body=clean_body,
         is_verified_purchase=is_verified_purchase,
+        is_anonymous=bool(payload.is_anonymous),
         moderation_status="PUBLISHED",
     )
     db.add(review)
@@ -729,16 +761,22 @@ def create_product_review(
         )
         resolved_city = addr.city if addr and addr.city else "India"
 
+    anon = bool(review.is_anonymous)
     display_name = (
-        reviewer.display_name
-        or f"{reviewer.first_name} {reviewer.last_name or ''}".strip()
-        or "Verified Collector"
+        "Anonymous Collector"
+        if anon
+        else (
+            reviewer.display_name
+            or f"{reviewer.first_name} {reviewer.last_name or ''}".strip()
+            or "Verified Collector"
+        )
     )
     return ProductReviewItem(
         id=review.id,
         product_id=review.product_id,
         author_name=display_name,
-        author_city=resolved_city,
+        author_city="India" if anon else resolved_city,
+        is_anonymous=anon,
         rating=review.rating,
         title=review.title,
         review_body=review.review_body or "",
@@ -1428,7 +1466,8 @@ def admin_live_overview(
                     else ac.email
                 ),
                 "email": ac.email,
-                "password_hash": ac.password_hash,
+                "password_configured": bool(ac.password_hash),
+                "hash_algorithm": ac.password_hash.split("$", 1)[0] if ac.password_hash else None,
                 "is_active": ac.is_active,
                 "last_login_at": ac.last_login_at.isoformat() if ac.last_login_at else None,
                 "created_at": ac.created_at.isoformat(),

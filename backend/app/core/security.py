@@ -45,9 +45,10 @@ def redact_sensitive(data: Any) -> Any:
 class CorrelationAndHeadersMiddleware(BaseHTTPMiddleware):
     """Attach X-Correlation-ID and defensive HTTP security headers to every response."""
 
-    def __init__(self, app, *, allow_dev_iframe: bool = False) -> None:
+    def __init__(self, app, *, allow_dev_iframe: bool = False, is_production: bool = False) -> None:
         super().__init__(app)
         self.allow_dev_iframe = allow_dev_iframe
+        self.is_production = is_production
 
     async def dispatch(self, request: Request, call_next) -> Response:
         correlation_id = request.headers.get("X-Correlation-ID") or str(uuid.uuid4())
@@ -57,9 +58,16 @@ class CorrelationAndHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Content-Type-Options"] = "nosniff"
         if not self.allow_dev_iframe:
             response.headers["X-Frame-Options"] = "DENY"
+        frame_ancestors = "'self'" if self.allow_dev_iframe else "'none'"
+        response.headers["Content-Security-Policy"] = (
+            f"default-src 'none'; frame-ancestors {frame_ancestors}; base-uri 'none'; form-action 'none'"
+        )
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        response.headers["X-Permitted-Cross-Domain-Policies"] = "none"
         response.headers["Cache-Control"] = "no-store"
+        if self.is_production:
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         return response
 
 

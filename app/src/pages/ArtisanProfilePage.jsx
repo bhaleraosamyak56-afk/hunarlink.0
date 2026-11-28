@@ -901,7 +901,7 @@ export default function ArtisanProfilePage() {
                 </li>
                 <li>
                   <IconShield size={16} />
-                  <span>Escrow-protected checkout &amp; GI provenance tag</span>
+                  <span>Verified Razorpay checkout &amp; GI provenance tag</span>
                 </li>
                 <li>
                   <IconTruck size={16} />

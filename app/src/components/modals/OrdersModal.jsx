@@ -36,7 +36,7 @@ export default function OrdersModal() {
               No orders yet
             </h3>
             <p style={{ color: 'var(--text-500)', fontSize: '0.86rem', marginBottom: 16 }}>
-              Every acquisition is escrow-protected, insured in transit, and arrives with a GI
+              Every acquisition is processed via verified Razorpay Standard Checkout or Insured COD, insured in transit, and arrives with a GI
               passport.
             </p>
             <button

@@ -10,6 +10,7 @@ Security invariants:
 """
 from __future__ import annotations
 
+import hashlib
 import re
 import uuid
 
@@ -38,12 +39,16 @@ from app.models.core_models import (
     AdminRolePermission,
     AdminUserRole,
     PlatformRole,
+    ProductReview,
+    RetailOrder,
+    RetailOrderItem,
     SellerDocument,
     SellerProductListing,
     SellerProfile,
     SellerVerificationApplication,
     User,
     UserAddress,
+    UserConsent,
     UserLoginLog,
     UserRoleAssignment,
 )
@@ -61,6 +66,8 @@ from app.modules.auth.schemas import (
     ArtisanVerificationSubmitResponse,
     AuthSyncRequest,
     AuthUserProfileResponse,
+    ConsentBatchUpdateRequest,
+    ConsentItemResponse,
     DeleteAccountRequest,
     DeleteAccountResponse,
     SellerProfileBrief,
@@ -530,6 +537,46 @@ def sync_authenticated_user(
             request=request,
         )
 
+    if payload.dpdp_consent_accepted is not None:
+        _upsert_user_consent(
+            db,
+            user_id=user.id,
+            consent_scope="essential_account",
+            granted=bool(payload.dpdp_consent_accepted),
+            policy_version=payload.policy_version,
+            source_surface="auth_sync",
+            request=request,
+        )
+        _upsert_user_consent(
+            db,
+            user_id=user.id,
+            consent_scope="order_fulfilment",
+            granted=bool(payload.dpdp_consent_accepted),
+            policy_version=payload.policy_version,
+            source_surface="auth_sync",
+            request=request,
+        )
+    if payload.age_confirmed is not None:
+        _upsert_user_consent(
+            db,
+            user_id=user.id,
+            consent_scope="age_18_plus_confirmation",
+            granted=bool(payload.age_confirmed),
+            policy_version=payload.policy_version,
+            source_surface="auth_sync",
+            request=request,
+        )
+    if payload.marketing_opt_in is not None:
+        _upsert_user_consent(
+            db,
+            user_id=user.id,
+            consent_scope="marketing_updates",
+            granted=bool(payload.marketing_opt_in),
+            policy_version=payload.policy_version,
+            source_surface="auth_sync",
+            request=request,
+        )
+
     record_audit_log(
         db,
         actor_user_id=user.id,
@@ -552,6 +599,73 @@ def sync_authenticated_user(
     return _build_user_response(db, user, is_new_user=is_new_user)
 
 
+def _hash_client_ip(request: Request) -> str | None:
+    ip = request.client.host if request.client else None
+    if not ip:
+        return None
+    return hashlib.sha256(ip.encode("utf-8")).hexdigest()
+
+
+def _upsert_user_consent(
+    db: Session,
+    *,
+    user_id: str,
+    consent_scope: str,
+    granted: bool,
+    policy_version: str,
+    source_surface: str | None,
+    request: Request,
+) -> UserConsent:
+    UserConsent.__table__.create(bind=db.get_bind(), checkfirst=True)
+    now = utcnow()
+    row = db.scalar(
+        select(UserConsent).where(
+            UserConsent.user_id == user_id,
+            UserConsent.consent_scope == consent_scope,
+        )
+    )
+    ip_hash = _hash_client_ip(request)
+    ua = (request.headers.get("user-agent") or "")[:255] or None
+    if row is None:
+        row = UserConsent(
+            id=new_uuid(),
+            user_id=user_id,
+            consent_scope=consent_scope,
+            policy_version=policy_version[:32],
+            granted=bool(granted),
+            source_surface=source_surface[:64] if source_surface else None,
+            ip_hash=ip_hash,
+            user_agent=ua,
+            granted_at=now if granted else None,
+            withdrawn_at=None if granted else now,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(row)
+        db.flush()
+    else:
+        row.policy_version = policy_version[:32]
+        row.granted = bool(granted)
+        row.source_surface = source_surface[:64] if source_surface else row.source_surface
+        row.ip_hash = ip_hash
+        row.user_agent = ua
+        if granted:
+            row.granted_at = now
+        else:
+            row.withdrawn_at = now
+        row.updated_at = now
+    return row
+
+
+_DEFAULT_CONSENT_SCOPES = (
+    "essential_account",
+    "order_fulfilment",
+    "age_18_plus_confirmation",
+    "marketing_updates",
+    "analytics_telemetry",
+)
+
+
 @router.get("/me", response_model=AuthUserProfileResponse)
 def get_my_profile(
     principal: AuthenticatedPrincipal = Depends(get_current_principal),
@@ -562,6 +676,256 @@ def get_my_profile(
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
     return _build_user_response(db, user, is_new_user=False)
+
+
+@router.get("/consents", response_model=list[ConsentItemResponse])
+def list_my_consents(
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> list[ConsentItemResponse]:
+    """Return DPDP Act 2023 consent preferences recorded for the signed-in Data Principal."""
+    UserConsent.__table__.create(bind=db.get_bind(), checkfirst=True)
+    rows = list(
+        db.scalars(select(UserConsent).where(UserConsent.user_id == principal.user_id)).all()
+    )
+    by_scope = {r.consent_scope: r for r in rows}
+    results: list[ConsentItemResponse] = []
+    for scope in _DEFAULT_CONSENT_SCOPES:
+        r = by_scope.get(scope)
+        if r is not None:
+            results.append(
+                ConsentItemResponse(
+                    consent_scope=r.consent_scope,
+                    policy_version=r.policy_version,
+                    granted=bool(r.granted),
+                    source_surface=r.source_surface,
+                    granted_at=r.granted_at,
+                    withdrawn_at=r.withdrawn_at,
+                    updated_at=r.updated_at,
+                )
+            )
+        else:
+            results.append(
+                ConsentItemResponse(
+                    consent_scope=scope,
+                    policy_version="2026-11-v1",
+                    granted=(scope in {"essential_account", "order_fulfilment"}),
+                    source_surface="implicit_contractual",
+                )
+            )
+    return results
+
+
+@router.put("/consents", response_model=list[ConsentItemResponse])
+def update_my_consents(
+    payload: ConsentBatchUpdateRequest,
+    request: Request,
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> list[ConsentItemResponse]:
+    """Grant or withdraw specific DPDP consent scopes without dark patterns."""
+    changed: list[dict] = []
+    for pref in payload.consents:
+        if pref.consent_scope == "essential_account" and not pref.granted:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="Essential account processing cannot be disabled while the account remains active. Use Account Deletion to erase your account.",
+            )
+        row = _upsert_user_consent(
+            db,
+            user_id=principal.user_id,
+            consent_scope=pref.consent_scope,
+            granted=pref.granted,
+            policy_version=pref.policy_version,
+            source_surface=pref.source_surface or "profile_privacy_center",
+            request=request,
+        )
+        changed.append(
+            {
+                "consent_scope": row.consent_scope,
+                "granted": bool(row.granted),
+                "policy_version": row.policy_version,
+            }
+        )
+
+    record_audit_log(
+        db,
+        actor_user_id=principal.user_id,
+        actor_role="USER",
+        action="DPDP_CONSENT_UPDATED",
+        target_type="user_consents",
+        target_id=principal.user_id,
+        correlation_id=getattr(request.state, "correlation_id", "") or str(uuid.uuid4()),
+        new_values={"updates": changed},
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+    db.commit()
+    return list_my_consents(principal=principal, db=db)
+
+
+@router.get("/me/export")
+def export_my_personal_data(
+    request: Request,
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> dict:
+    """DPDP Section 11 Data Principal right to access & portable JSON export of personal data."""
+    user = db.scalar(select(User).where(User.id == principal.user_id))
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+
+    UserConsent.__table__.create(bind=db.get_bind(), checkfirst=True)
+    UserLoginLog.__table__.create(bind=db.get_bind(), checkfirst=True)
+
+    addresses = list(
+        db.scalars(
+            select(UserAddress).where(UserAddress.user_id == user.id, UserAddress.is_active == True)  # noqa: E712
+        ).all()
+    )
+    consents = list_my_consents(principal=principal, db=db)
+    orders = list(
+        db.scalars(
+            select(RetailOrder)
+            .where(RetailOrder.customer_user_id == user.id)
+            .order_by(RetailOrder.created_at.desc())
+        ).all()
+    )
+    order_items_by_oid: dict[str, list[dict]] = {}
+    if orders:
+        oids = [o.id for o in orders]
+        for oi in db.scalars(
+            select(RetailOrderItem).where(RetailOrderItem.retail_order_id.in_(oids))
+        ).all():
+            order_items_by_oid.setdefault(oi.retail_order_id, []).append(
+                {
+                    "product_id": oi.product_id,
+                    "title": oi.title_snapshot,
+                    "sku": oi.sku_snapshot,
+                    "quantity": oi.quantity,
+                    "unit_price": str(oi.unit_price),
+                    "line_total": str(oi.line_total),
+                }
+            )
+
+    reviews = list(
+        db.scalars(
+            select(ProductReview)
+            .where(ProductReview.reviewer_user_id == user.id)
+            .order_by(ProductReview.created_at.desc())
+        ).all()
+    )
+    seller = db.scalar(select(SellerProfile).where(SellerProfile.user_id == user.id))
+    login_logs = list(
+        db.scalars(
+            select(UserLoginLog)
+            .where(UserLoginLog.user_id == user.id)
+            .order_by(UserLoginLog.created_at.desc())
+            .limit(50)
+        ).all()
+    )
+
+    record_audit_log(
+        db,
+        actor_user_id=user.id,
+        actor_role="USER",
+        action="DPDP_DATA_EXPORTED",
+        target_type="users",
+        target_id=user.id,
+        correlation_id=getattr(request.state, "correlation_id", "") or str(uuid.uuid4()),
+        new_values={"orders_count": len(orders), "addresses_count": len(addresses)},
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+    db.commit()
+
+    return {
+        "exported_at": utcnow().isoformat(),
+        "dpdp_notice_version": "2026-11-v1",
+        "data_fiduciary": "HunarLink Craft Marketplace",
+        "profile": {
+            "user_id": user.id,
+            "clerk_user_id": user.clerk_user_id,
+            "email": user.email,
+            "email_verified": bool(user.email_verified),
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "display_name": user.display_name,
+            "phone": user.phone,
+            "account_role": user.account_role,
+            "account_status": user.account_status,
+            "roles": get_active_role_codes(db, user.id),
+            "created_at": user.created_at.isoformat() if user.created_at else None,
+            "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
+        },
+        "addresses": [
+            {
+                "id": a.id,
+                "label": a.address_label,
+                "recipient_name": a.recipient_name,
+                "recipient_phone": a.recipient_phone,
+                "line1": a.line1,
+                "line2": a.line2,
+                "city": a.city,
+                "state_province": a.state_province,
+                "postal_code": a.postal_code,
+                "is_default": bool(a.is_default),
+            }
+            for a in addresses
+        ],
+        "consents": [c.model_dump(mode="json") for c in consents],
+        "retail_orders": [
+            {
+                "order_id": o.id,
+                "order_number": o.order_number,
+                "payment_method": o.payment_method,
+                "payment_status": o.payment_status,
+                "fulfilment_status": o.fulfilment_status,
+                "currency_code": o.currency_code,
+                "total_amount": str(o.total_amount),
+                "shipping_address": o.shipping_address_json,
+                "items": order_items_by_oid.get(o.id, []),
+                "created_at": o.created_at.isoformat() if o.created_at else None,
+            }
+            for o in orders
+        ],
+        "product_reviews": [
+            {
+                "review_id": rv.id,
+                "product_id": rv.product_id,
+                "rating": rv.rating,
+                "title": rv.title,
+                "review_body": rv.review_body,
+                "is_anonymous": bool(getattr(rv, "is_anonymous", False)),
+                "is_verified_purchase": bool(rv.is_verified_purchase),
+                "created_at": rv.created_at.isoformat() if rv.created_at else None,
+            }
+            for rv in reviews
+        ],
+        "seller_profile": (
+            {
+                "seller_profile_id": seller.id,
+                "store_name": seller.store_name,
+                "store_slug": seller.store_slug,
+                "craft_specialty": seller.craft_specialty,
+                "workshop_district": seller.workshop_district,
+                "verification_path": seller.verification_path,
+                "verification_status": seller.verification_status,
+                "profile_status": seller.profile_status,
+            }
+            if seller is not None
+            else None
+        ),
+        "recent_auth_activity": [
+            {
+                "event_type": log.auth_event_type,
+                "role_code": log.role_code,
+                "auth_method": log.auth_method,
+                "created_at": log.created_at.isoformat() if log.created_at else None,
+            }
+            for log in login_logs
+        ],
+    }
 
 
 def _execute_self_delete(

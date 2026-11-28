@@ -32,6 +32,7 @@ import {
   setPendingClerkAuthMode,
   setPendingClerkRole
 } from '../data/clerkConfig.js';
+import { sanitizeInternalRedirect } from '../utils/safeRedirect.js';
 
 /* ==========================================================================
    ClerkBoundary — the single file in the app that imports @clerk/react
@@ -473,6 +474,13 @@ function ClerkBridgeInner({ children }) {
             : authMode === 'signup' || authMode === 'signin'
               ? authMode
               : 'sync';
+        let dpdpMeta = {};
+        try {
+          const rawConsent = window.sessionStorage.getItem('hunarlink_pending_dpdp_consent');
+          if (rawConsent) dpdpMeta = JSON.parse(rawConsent) || {};
+        } catch {
+          dpdpMeta = {};
+        }
         const res = await syncAuthenticatedUser(
           {
             email,
@@ -482,10 +490,24 @@ function ClerkBridgeInner({ children }) {
             display_name: syncedMeta.fullName || syncedMeta.first || null,
             phone: syncedMeta.phone || null,
             requested_role: requestedRole === 'artisan' ? 'artisan' : 'buyer',
-            auth_mode: effectiveAuthMode
+            auth_mode: effectiveAuthMode,
+            ...(typeof dpdpMeta.dpdpAccepted === 'boolean'
+              ? { dpdp_consent_accepted: dpdpMeta.dpdpAccepted }
+              : {}),
+            ...(typeof dpdpMeta.age18 === 'boolean'
+              ? { age_confirmed: dpdpMeta.age18 }
+              : {}),
+            ...(typeof dpdpMeta.marketingOptIn === 'boolean'
+              ? { marketing_opt_in: dpdpMeta.marketingOptIn }
+              : {})
           },
           token
         );
+        try {
+          window.sessionStorage.removeItem('hunarlink_pending_dpdp_consent');
+        } catch {
+          /* ignore */
+        }
         lastDbSyncKeyRef.current = syncKey;
         syncedAccountIdsRef.current.add(clerkAccount.id);
 
@@ -896,7 +918,7 @@ function ClerkBridgeInner({ children }) {
             role: 'buyer',
             isLoggedIn: true
           });
-          const buyerDest = (redirectTo || '/').startsWith('/') ? (redirectTo || '/') : `/${redirectTo}`;
+          const buyerDest = sanitizeInternalRedirect(redirectTo, '/');
           return { alreadySignedIn: true, destination: buyerDest, artisanVerified: false };
         }
 

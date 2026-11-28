@@ -27,6 +27,10 @@ class AuthSyncRequest(BaseModel):
     phone: str | None = Field(default=None, max_length=32)
     requested_role: Literal["buyer", "artisan"] = "buyer"
     auth_mode: Literal["signup", "signin", "sync"] = "sync"
+    dpdp_consent_accepted: bool | None = None
+    age_confirmed: bool | None = None
+    marketing_opt_in: bool | None = None
+    policy_version: str = Field(default="2026-11-v1", max_length=32)
 
 
 class AccountCheckRequest(BaseModel):
@@ -181,3 +185,38 @@ class AdminPasswordLoginResponse(BaseModel):
     email: str
     display_name: str
     admin_permissions: list[str] = Field(default_factory=list)
+
+
+ConsentScopeLiteral = Literal[
+    "essential_account",
+    "order_fulfilment",
+    "marketing_updates",
+    "analytics_telemetry",
+    "age_18_plus_confirmation",
+]
+
+
+class ConsentPreferenceIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    consent_scope: ConsentScopeLiteral
+    granted: bool
+    policy_version: str = Field(default="2026-11-v1", min_length=1, max_length=32)
+    source_surface: str | None = Field(default=None, max_length=64)
+
+
+class ConsentBatchUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    consents: list[ConsentPreferenceIn] = Field(..., min_length=1, max_length=10)
+
+
+class ConsentItemResponse(BaseModel):
+    consent_scope: str
+    policy_version: str
+    granted: bool
+    source_surface: str | None = None
+    granted_at: datetime | None = None
+    withdrawn_at: datetime | None = None
+    updated_at: datetime | None = None
+

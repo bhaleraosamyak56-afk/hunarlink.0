@@ -749,8 +749,8 @@ export default function SellerPage() {
       shippingFee: 0,
       total: prod.price,
       artisanPayout: prod.price,
-      paymentMethod: 'UPI Verified Escrow',
-      paymentStatus: 'Paid (Escrow Protected)',
+      paymentMethod: 'Razorpay UPI Checkout',
+      paymentStatus: 'Paid (Razorpay Standard Checkout)',
       address: `${b.name}, ${b.locality}, ${b.city} - ${b.pincode}`,
       stage: 1,
       sellerNote: '',
@@ -1090,7 +1090,7 @@ export default function SellerPage() {
                               <strong>{formatINR(o.total)}</strong>
                             </div>
                             <div style={{ fontSize: '0.72rem', color: 'var(--text-500)', marginTop: '2px' }}>
-                              {o.date || 'Recent'} • {o.paymentMethod || 'Escrow'} • Stage: {stageLbl}
+                              {o.date || 'Recent'} • {o.paymentMethod || 'Razorpay Checkout'} • Stage: {stageLbl}
                             </div>
                           </div>
                           <button type="button" className="btn-forest" onClick={() => switchTab('orders')}>
@@ -1648,8 +1648,8 @@ export default function SellerPage() {
                                   {i.giId ? ` • ${i.giId}` : ''}
                                 </div>
                               ))}
-                              <div className="oc-line">Method: {o.paymentMethod || 'UPI Verified Escrow'}</div>
-                              <div className="oc-line">Status: {o.paymentStatus || 'Paid (Escrow Protected)'}</div>
+                              <div className="oc-line">Method: {o.paymentMethod || 'Razorpay Standard Checkout'}</div>
+                              <div className="oc-line">Status: {o.paymentStatus || 'Paid (Razorpay Checkout)'}</div>
                               <div className="oc-line"><strong>Total: {formatINR(o.total)}</strong></div>
                               <div className="oc-line">Your payout: {formatINR(o.artisanPayout || o.total)}</div>
                             </div>

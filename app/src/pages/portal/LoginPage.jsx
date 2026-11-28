@@ -17,6 +17,7 @@ import {
   IconUser
 } from '../../components/LineIcons.jsx';
 import { hdSrcFor, srcSetFor } from '../../data/imageVariants.js';
+import { sanitizeInternalRedirect } from '../../utils/safeRedirect.js';
 import '../../styles/portal.css';
 
 function GoogleGlyph() {
@@ -58,7 +59,7 @@ export default function LoginPage() {
   const accountDeletedNotice = params.get('account_deleted') === '1';
   const roleConflictNotice = params.get('role_conflict') === '1';
   const conflictMsg = params.get('conflict_msg') || '';
-  const nextUrl = params.get('next') || '/';
+  const nextUrl = sanitizeInternalRedirect(params.get('next') || params.get('redirect'), '/');
 
   const [authMode, setAuthMode] = useState(
     notRegisteredNotice || accountDeletedNotice ? 'register' : initialMode
@@ -87,6 +88,24 @@ export default function LoginPage() {
   const [emailStep, setEmailStep] = useState('input'); // 'input' | 'verify'
   const [pendingFlow, setPendingFlow] = useState('signIn');
   const [emailBusy, setEmailBusy] = useState(false);
+  const [dpdpConsent, setDpdpConsent] = useState(false);
+  const [ageConfirmed, setAgeConfirmed] = useState(false);
+  const [marketingOptIn, setMarketingOptIn] = useState(false);
+
+  const persistPendingDpdp = () => {
+    try {
+      window.sessionStorage.setItem(
+        'hunarlink_pending_dpdp_consent',
+        JSON.stringify({
+          dpdpAccepted: Boolean(dpdpConsent),
+          age18: Boolean(ageConfirmed),
+          marketingOptIn: Boolean(marketingOptIn)
+        })
+      );
+    } catch {
+      /* ignore */
+    }
+  };
 
   const signedIn = clerk.enabled
     ? Boolean(clerk.isSignedIn && user && user.isLoggedIn)
@@ -173,6 +192,15 @@ export default function LoginPage() {
       setErrMsg('Clerk authentication is required. Configure VITE_CLERK_PUBLISHABLE_KEY.');
       return;
     }
+    if (authMode === 'register') {
+      if (!dpdpConsent || !ageConfirmed) {
+        setErrMsg(
+          'Please confirm the DPDP Data Privacy Notice and that you are 18 years or older before registering.'
+        );
+        return;
+      }
+      persistPendingDpdp();
+    }
     setErrMsg('');
     setBusyProvider(provider);
     try {
@@ -242,9 +270,18 @@ export default function LoginPage() {
       setErrMsg('Clerk email authentication is unavailable.');
       return;
     }
-    if (authMode === 'register' && password.length < 15) {
-      setErrMsg('Password must be at least 15 characters long.');
-      return;
+    if (authMode === 'register') {
+      if (!dpdpConsent || !ageConfirmed) {
+        setErrMsg(
+          'Please confirm the DPDP Data Privacy Notice and that you are 18 years or older before registering.'
+        );
+        return;
+      }
+      if (password.length < 15) {
+        setErrMsg('Password must be at least 15 characters long.');
+        return;
+      }
+      persistPendingDpdp();
     }
     setErrMsg('');
     setEmailBusy(true);
@@ -511,7 +548,7 @@ export default function LoginPage() {
                 <>
                   <li><IconTruck size={14} /> Direct workshop listings stored in HunarLink MySQL / DB</li>
                   <li><IconBadgeCheck size={14} /> GI Registry &amp; Karigar verification workflow</li>
-                  <li><IconShield size={14} /> Escrow-protected Razorpay payouts</li>
+                  <li><IconShield size={14} /> Verified Razorpay Standard Checkout payouts</li>
                 </>
               ) : (
                 <>
@@ -670,6 +707,64 @@ export default function LoginPage() {
 
                 {clerk.enabled ? (
                   <div className="login-social-section">
+                    {authMode === 'register' && (
+                      <div
+                        style={{
+                          background: '#f7f5ee',
+                          border: '1px solid rgba(20,56,42,0.16)',
+                          borderRadius: '10px',
+                          padding: '12px 14px',
+                          marginBottom: '12px',
+                          fontSize: '0.8rem',
+                          lineHeight: 1.5
+                        }}
+                      >
+                        <div style={{ fontWeight: 700, color: '#14382a', marginBottom: 6 }}>
+                          DPDP Act 2023 Consent &amp; Age Confirmation
+                        </div>
+                        <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 6, cursor: 'pointer' }}>
+                          <input
+                            type="checkbox"
+                            id="reg-dpdp-consent"
+                            checked={dpdpConsent}
+                            onChange={(e) => setDpdpConsent(e.target.checked)}
+                            style={{ marginTop: 3 }}
+                          />
+                          <span>
+                            I agree to HunarLink&apos;s{' '}
+                            <Link to="/privacy" style={{ color: '#0B3A26', fontWeight: 700, textDecoration: 'underline' }}>
+                              DPDP Privacy Notice
+                            </Link>{' '}
+                            for essential account &amp; order processing. <span style={{ color: '#b33818' }}>*</span>
+                          </span>
+                        </label>
+                        <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 6, cursor: 'pointer' }}>
+                          <input
+                            type="checkbox"
+                            id="reg-age-18"
+                            checked={ageConfirmed}
+                            onChange={(e) => setAgeConfirmed(e.target.checked)}
+                            style={{ marginTop: 3 }}
+                          />
+                          <span>
+                            I confirm I am 18 years of age or older (DPDP Sec. 9). <span style={{ color: '#b33818' }}>*</span>
+                          </span>
+                        </label>
+                        <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', cursor: 'pointer', opacity: 0.9 }}>
+                          <input
+                            type="checkbox"
+                            id="reg-marketing-optin"
+                            checked={marketingOptIn}
+                            onChange={(e) => setMarketingOptIn(e.target.checked)}
+                            style={{ marginTop: 3 }}
+                          />
+                          <span>
+                            (Optional) Receive seasonal Valley Chronicle craft dispatches. You can withdraw anytime.
+                          </span>
+                        </label>
+                      </div>
+                    )}
+
                     <div className="login-social-stack">
                       <button
                         type="button"

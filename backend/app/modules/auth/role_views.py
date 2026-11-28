@@ -7,7 +7,7 @@ import re
 
 from sqlalchemy import Engine, inspect, text
 
-from app.models.core_models import ProductReview, UserLoginLog
+from app.models.core_models import ProductReview, UserConsent, UserLoginLog
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 SQL_VIEWS_PATH = REPO_ROOT / "hunarlink-database" / "sql" / "15_role_registration_and_login_views.sql"
@@ -182,6 +182,29 @@ def ensure_login_tracking_and_views(engine: Engine) -> dict:
     table_existed = insp.has_table("user_login_logs")
     UserLoginLog.__table__.create(bind=engine, checkfirst=True)
     ProductReview.__table__.create(bind=engine, checkfirst=True)
+    UserConsent.__table__.create(bind=engine, checkfirst=True)
+
+    # Ensure additive DPDP / QR columns on pre-existing tables
+    refreshed_insp = inspect(engine)
+    if refreshed_insp.has_table("product_reviews"):
+        pr_cols = {c["name"] for c in refreshed_insp.get_columns("product_reviews")}
+        if "is_anonymous" not in pr_cols:
+            col_ddl = "TINYINT(1) NOT NULL DEFAULT 0" if engine.dialect.name == "mysql" else "BOOLEAN NOT NULL DEFAULT 0"
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE product_reviews ADD COLUMN is_anonymous {col_ddl}"))
+
+    if refreshed_insp.has_table("craft_passports"):
+        cp_cols = {c["name"] for c in refreshed_insp.get_columns("craft_passports")}
+        with engine.begin() as conn:
+            if "serial_number" not in cp_cols:
+                conn.execute(text("ALTER TABLE craft_passports ADD COLUMN serial_number VARCHAR(48) NULL"))
+            if "first_scanned_at" not in cp_cols:
+                dt_ddl = "DATETIME(6) NULL" if engine.dialect.name == "mysql" else "DATETIME NULL"
+                conn.execute(text(f"ALTER TABLE craft_passports ADD COLUMN first_scanned_at {dt_ddl}"))
+            if "scan_count" not in cp_cols:
+                int_ddl = "INT NOT NULL DEFAULT 0" if engine.dialect.name == "mysql" else "INTEGER NOT NULL DEFAULT 0"
+                conn.execute(text(f"ALTER TABLE craft_passports ADD COLUMN scan_count {int_ddl}"))
+
     table_created = not table_existed and inspect(engine).has_table("user_login_logs")
 
     views_applied: list[str] = []

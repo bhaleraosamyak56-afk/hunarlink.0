@@ -238,6 +238,18 @@ export function fetchMyAuthProfile(token) {
   return apiRequest('/api/v1/auth/me', { token });
 }
 
+export function fetchMyConsents(token) {
+  return apiRequest('/api/v1/auth/consents', { token });
+}
+
+export function updateMyConsents(payload, token) {
+  return apiRequest('/api/v1/auth/consents', { method: 'PUT', body: payload, token });
+}
+
+export function exportMyPersonalData(token) {
+  return apiRequest('/api/v1/auth/me/export', { token });
+}
+
 export function deleteMyAccount(token, { currentPassword = null, reason = null } = {}) {
   const body = {};
   if (currentPassword) body.current_password = currentPassword;

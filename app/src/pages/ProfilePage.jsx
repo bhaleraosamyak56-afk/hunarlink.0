@@ -6,7 +6,10 @@ import { useClerkBridge } from '../data/clerkConfig.js';
 import {
   canAttemptBackend,
   createMyAddress,
-  deleteMyAddress
+  deleteMyAddress,
+  exportMyPersonalData,
+  fetchMyConsents,
+  updateMyConsents
 } from '../services/apiClient.js';
 import PortalScope from '../components/PortalScope.jsx';
 import { appHref } from '../utils/href.js';
@@ -25,7 +28,7 @@ const EMPTY_PROFILE = {
   dob: '',
   bio: '',
   preferredUpi: '',
-  preferredPayment: 'UPI Verified Escrow',
+  preferredPayment: 'Razorpay UPI Checkout',
   avatarColor: '#E05A17',
   avatarPhoto: '',
   badge: 'U',
@@ -132,7 +135,7 @@ export default function ProfilePage() {
   });
   const [payDraft, setPayDraft] = useState({
     preferredUpi: profile.preferredUpi || '',
-    preferredPayment: profile.preferredPayment || 'UPI Verified Escrow'
+    preferredPayment: profile.preferredPayment || 'Razorpay UPI Checkout'
   });
   const [deletePanelOpen, setDeletePanelOpen] = useState(false);
   const [deletePassword, setDeletePassword] = useState('');
@@ -142,6 +145,36 @@ export default function ProfilePage() {
   const [deleteError, setDeleteError] = useState('');
   const [deletingAccount, setDeletingAccount] = useState(false);
   const [sendingDeleteCode, setSendingDeleteCode] = useState(false);
+  const [consentsState, setConsentsState] = useState({
+    marketing_updates: false,
+    analytics_telemetry: false
+  });
+  const [exportingData, setExportingData] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    async function loadConsents() {
+      if (!canAttemptBackend() || !clerk?.isSignedIn || !clerk?.getToken) return;
+      try {
+        const token = await clerk.getToken();
+        if (!token || !active) return;
+        const rows = await fetchMyConsents(token);
+        if (!active || !Array.isArray(rows)) return;
+        const next = { marketing_updates: false, analytics_telemetry: false };
+        for (const r of rows) {
+          if (r.consent_scope === 'marketing_updates') next.marketing_updates = Boolean(r.granted);
+          if (r.consent_scope === 'analytics_telemetry') next.analytics_telemetry = Boolean(r.granted);
+        }
+        setConsentsState(next);
+      } catch {
+        /* non-fatal */
+      }
+    }
+    loadConsents();
+    return () => {
+      active = false;
+    };
+  }, [clerk?.isSignedIn, clerk?.getToken]);
 
   const photoInput = useRef(null);
   const avatarInput = useRef(null);
@@ -196,6 +229,21 @@ export default function ProfilePage() {
 
   function submitPersonal(e) {
     e.preventDefault();
+    if (profile.dob) {
+      const dobDate = new Date(`${profile.dob}T00:00:00Z`);
+      if (!Number.isNaN(dobDate.getTime())) {
+        const now = new Date();
+        let age = now.getUTCFullYear() - dobDate.getUTCFullYear();
+        const mDiff = now.getUTCMonth() - dobDate.getUTCMonth();
+        if (mDiff < 0 || (mDiff === 0 && now.getUTCDate() < dobDate.getUTCDate())) {
+          age -= 1;
+        }
+        if (age < 18) {
+          toast('Under DPDP Act Sec. 9, HunarLink accounts require users to be 18 years or older.', 'error');
+          return;
+        }
+      }
+    }
     setSavedSnapshot(null);
     setEditing((ed) => ({ ...ed, personal: false }));
     toast('Personal information updated & synced across HunarLink!', 'success');
@@ -601,6 +649,120 @@ export default function ProfilePage() {
             </div>
           </div>
 
+          {/* Block D2: DPDP Privacy Controls & Data Export */}
+          <div
+            className="fk-section-block"
+            style={{
+              marginTop: '18px',
+              padding: '18px',
+              borderRadius: '12px',
+              border: '1px solid rgba(11, 58, 38, 0.2)',
+              background: '#f7f5ee'
+            }}
+          >
+            <div className="fk-block-head" style={{ marginBottom: '8px' }}>
+              <h3 style={{ fontSize: '1.1rem', color: '#0B3A26', margin: 0 }}>
+                DPDP Privacy Controls &amp; Your Data Rights
+              </h3>
+              <button
+                type="button"
+                className="btn-orange-outline"
+                disabled={exportingData}
+                onClick={async () => {
+                  setExportingData(true);
+                  try {
+                    let payload = {
+                      profile,
+                      addresses,
+                      exported_at: new Date().toISOString(),
+                      source: 'local-fallback'
+                    };
+                    if (canAttemptBackend() && clerk.getToken) {
+                      const token = await clerk.getToken();
+                      if (token) {
+                        payload = await exportMyPersonalData(token);
+                      }
+                    }
+                    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+                      type: 'application/json'
+                    });
+                    const url = URL.createObjectURL(blob);
+                    const link = document.createElement('a');
+                    link.href = url;
+                    link.download = 'hunarlink-my-personal-data.json';
+                    link.click();
+                    URL.revokeObjectURL(url);
+                    toast('Personal data JSON exported.', 'success');
+                  } catch (err) {
+                    toast(err?.message || 'Could not export personal data.', 'error');
+                  } finally {
+                    setExportingData(false);
+                  }
+                }}
+              >
+                {exportingData ? 'Exporting…' : 'Download My Data (JSON)'}
+              </button>
+            </div>
+            <p style={{ fontSize: '0.84rem', color: 'var(--text-700)', marginBottom: '12px' }}>
+              Manage optional data consents under India&apos;s DPDP Act 2023 or download a copy of all personal records stored by HunarLink.
+            </p>
+            <div style={{ display: 'grid', gap: '8px', marginBottom: '10px', fontSize: '0.85rem' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={consentsState.marketing_updates}
+                  onChange={async (e) => {
+                    const next = e.target.checked;
+                    setConsentsState((s) => ({ ...s, marketing_updates: next }));
+                    try {
+                      if (canAttemptBackend() && clerk.getToken) {
+                        const token = await clerk.getToken();
+                        if (token) {
+                          await updateMyConsents(
+                            { consents: [{ consent_scope: 'marketing_updates', granted: next }] },
+                            token
+                          );
+                        }
+                      }
+                      toast(next ? 'Craft dispatches opted in.' : 'Marketing consent withdrawn.', 'success');
+                    } catch (err) {
+                      toast(err?.message || 'Could not update consent.', 'error');
+                    }
+                  }}
+                />
+                <span>Receive seasonal Valley Chronicle craft emails (optional)</span>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={consentsState.analytics_telemetry}
+                  onChange={async (e) => {
+                    const next = e.target.checked;
+                    setConsentsState((s) => ({ ...s, analytics_telemetry: next }));
+                    try {
+                      if (canAttemptBackend() && clerk.getToken) {
+                        const token = await clerk.getToken();
+                        if (token) {
+                          await updateMyConsents(
+                            { consents: [{ consent_scope: 'analytics_telemetry', granted: next }] },
+                            token
+                          );
+                        }
+                      }
+                      toast(next ? 'Craft analytics enabled.' : 'Analytics consent withdrawn.', 'success');
+                    } catch (err) {
+                      toast(err?.message || 'Could not update consent.', 'error');
+                    }
+                  }}
+                />
+                <span>Allow privacy-safe storefront analytics (optional)</span>
+              </label>
+            </div>
+            <a href={appHref('/privacy')} className="btn-link-edit" style={{ fontSize: '0.82rem' }}>
+              Read HunarLink DPDP Privacy Promise &rarr;
+            </a>
+          </div>
+
           {/* Block E: Permanent Account Deletion (Password Reverification) */}
           <div
             className="fk-section-block"
@@ -879,11 +1041,11 @@ export default function ProfilePage() {
         {/* VIEW 3: SAVED UPI & PAYMENT PREFERENCES */}
         <div className={`fk-tab-view${tab === 'payments' ? ' active' : ''}`} id="view-payments">
           <div className="fk-block-head">
-            <h2 className="fk-block-title">Saved UPI &amp; Escrow Payment Preferences</h2>
+            <h2 className="fk-block-title">Saved UPI &amp; Payment Preferences</h2>
           </div>
           <form style={{maxWidth: '480px'}} onSubmit={submitPayments}>
             <div className="form-field">
-              <label className="up-label" htmlFor="prof-upi">Preferred UPI ID (Instant Escrow)</label>
+              <label className="up-label" htmlFor="prof-upi">Preferred UPI ID (Razorpay Instant Pay)</label>
               <input type="text" id="prof-upi" className="up-input" placeholder="e.g. priya.sharma@okaxis"
                 value={payDraft.preferredUpi}
                 onChange={(e) => setPayDraft({ ...payDraft, preferredUpi: e.target.value })} />
@@ -892,9 +1054,9 @@ export default function ProfilePage() {
               <label className="up-label" htmlFor="prof-pay-mode">Default Checkout Method</label>
               <select id="prof-pay-mode" className="up-select" value={payDraft.preferredPayment}
                 onChange={(e) => setPayDraft({ ...payDraft, preferredPayment: e.target.value })}>
-                <option value="UPI Verified Escrow">UPI Verified Escrow (Zero Fee)</option>
-                <option value="Verify-on-Delivery Escrow">Insured COD / Verify-on-Delivery Escrow</option>
-                <option value="Card Escrow Protection">Credit / Debit Card Escrow</option>
+                <option value="Razorpay UPI Checkout">Razorpay UPI Checkout (Zero Fee)</option>
+                <option value="Insured Cash on Delivery">Insured Cash on Delivery (COD)</option>
+                <option value="Razorpay Hosted Card Checkout">Credit / Debit Card (Razorpay Hosted)</option>
               </select>
             </div>
             <button type="submit" className="btn-orange">Save Payment Preference</button>

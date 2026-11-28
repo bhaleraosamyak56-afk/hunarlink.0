@@ -40,7 +40,8 @@ const TITLES = {
   '/orders': 'My Orders',
   '/orders.html': 'My Orders',
   '/profile': 'My Profile',
-  '/profile.html': 'My Profile'
+  '/profile.html': 'My Profile',
+  '/privacy': 'Privacy & DPDP Promise'
 };
 
 export default function usePageTitle() {

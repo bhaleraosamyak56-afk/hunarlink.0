@@ -177,7 +177,10 @@ export default function Footer() {
               GI Authenticity Charter
             </button>
             <button type="button" className="footer-link-btn" onClick={() => navigate('/orders')}>
-              Insured Transit &amp; Escrow Policy
+              Insured Transit &amp; Checkout Policy
+            </button>
+            <button type="button" className="footer-link-btn" onClick={() => navigate('/privacy')}>
+              Privacy &amp; DPDP Promise
             </button>
             <button
               type="button"

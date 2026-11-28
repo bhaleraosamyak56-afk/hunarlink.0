@@ -1,19 +1,15 @@
 """FastAPI Router for Demand Bridge (Deterministic Wholesale Brief Parsing & Cluster Matching)."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.admin_security import verify_admin_session_token
 from app.core.auth import (
     AuthenticatedPrincipal,
-    get_token_verifier,
-    load_admin_principal_by_user_id,
-    load_principal_by_clerk_id,
+    get_current_principal,
     require_platform_role,
 )
-from app.core.config import Settings, get_settings
 from app.core.database import get_db
 from app.models.base import utcnow
 from app.models.core_models import SellerProfile
@@ -29,26 +25,15 @@ from app.modules.demand_bridge.schemas import (
 router = APIRouter(tags=["Demand Bridge"])
 
 
-def _optional_principal(
-    request: Request,
-    db: Session = Depends(get_db),
-    settings: Settings = Depends(get_settings),
-) -> AuthenticatedPrincipal | None:
-    auth_header = request.headers.get("authorization") or ""
-    if not auth_header.lower().startswith("bearer "):
+def _mask_email(raw: str | None) -> str | None:
+    if not raw or "@" not in raw:
         return None
-    token = auth_header.split(" ", 1)[1].strip()
-    if not token:
-        return None
-    try:
-        admin_claims = verify_admin_session_token(token, settings)
-        if admin_claims is not None:
-            return load_admin_principal_by_user_id(db, str(admin_claims["sub"]))
-        verifier = get_token_verifier(settings)
-        claims = verifier.verify(token)
-        return load_principal_by_clerk_id(db, str(claims["sub"]))
-    except Exception:
-        return None
+    local, domain = raw.split("@", 1)
+    if len(local) <= 1:
+        masked_local = "*"
+    else:
+        masked_local = f"{local[0]}***"
+    return f"{masked_local}@{domain}"
 
 
 @router.post("/demand-bridge/parse")
@@ -62,14 +47,14 @@ def post_parse_demand_brief(
 @router.post("/demand-bridge/match", status_code=status.HTTP_201_CREATED)
 def post_match_demand_bridge(
     payload: DemandMatchIn,
-    principal: AuthenticatedPrincipal | None = Depends(_optional_principal),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     db: Session = Depends(get_db),
 ) -> dict:
     """Step 2: Deterministically score artisans & automatically form Multi-Artisan Cluster when needed."""
     return match_demand_to_artisans(
         db,
         payload=payload,
-        buyer_user_id=principal.user_id if principal else None,
+        buyer_user_id=principal.user_id,
     )
 
 
@@ -77,12 +62,19 @@ def post_match_demand_bridge(
 def post_dispatch_cluster_inquiries(
     request_id: str,
     payload: DispatchDemandInquiryIn,
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     db: Session = Depends(get_db),
 ) -> dict:
     """Dispatch buyer brief to shortlisted / cluster artisans so offers appear in their Seller Studio."""
     req = db.scalar(select(BuyerDemandRequest).where(BuyerDemandRequest.id == request_id))
     if req is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Demand request not found.")
+
+    if req.buyer_user_id != principal.user_id and not principal.is_active_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the buyer who submitted this request may dispatch inquiries.",
+        )
 
     if payload.buyer_name:
         req.buyer_name = payload.buyer_name.strip()
@@ -127,13 +119,16 @@ def post_dispatch_cluster_inquiries(
 @router.get("/demand-bridge/requests")
 def list_recent_demand_requests(
     limit: int = 20,
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     db: Session = Depends(get_db),
 ) -> dict:
-    """List recent Demand Bridge briefs and cluster allocations (for transparency & Admin visibility)."""
+    """List recent Demand Bridge briefs owned by the signed-in buyer (or all for active Admin)."""
+    stmt = select(BuyerDemandRequest)
+    if not principal.is_active_admin:
+        stmt = stmt.where(BuyerDemandRequest.buyer_user_id == principal.user_id)
     reqs = list(
         db.scalars(
-            select(BuyerDemandRequest)
-            .order_by(BuyerDemandRequest.created_at.desc())
+            stmt.order_by(BuyerDemandRequest.created_at.desc())
             .limit(min(limit, 50))
         ).all()
     )
@@ -207,7 +202,7 @@ def list_seller_cluster_offers(
                 "demand_request_id": r.id,
                 "request_code": r.request_code,
                 "buyer_name": r.buyer_name or "Verified B2B Buyer",
-                "buyer_email": r.buyer_email,
+                "buyer_email": _mask_email(r.buyer_email),
                 "category_slug": r.category_slug,
                 "raw_request_text": r.raw_request_text,
                 "total_order_quantity": r.requested_quantity,

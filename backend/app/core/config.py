@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     admin_jwt_secret: SecretStr = Field(default=SecretStr(""))
     admin_session_ttl_seconds: int = Field(default=28800, ge=300, le=86400)
 
+    # CraftProof HMAC-SHA256 QR signing secret (configure in prod; ephemeral fallback in dev)
+    qr_signing_secret: SecretStr = Field(default=SecretStr(""))
+
     # Razorpay Standard Checkout (India / INR initial release)
     razorpay_mode: str = Field(default="test")
     razorpay_key_id: str = Field(default="")

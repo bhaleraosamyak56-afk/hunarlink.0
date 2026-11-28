@@ -879,8 +879,31 @@ class ProductReview(Base):
     title: Mapped[str | None] = mapped_column(String(160), nullable=True)
     review_body: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_verified_purchase: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_anonymous: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     moderation_status: Mapped[str] = mapped_column(String(32), default="PUBLISHED", nullable=False)
     seller_reply: Mapped[str | None] = mapped_column(Text, nullable=True)
     seller_replied_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class UserConsent(Base):
+    """DPDP Act 2023 granular consent ledger (versioned, purpose-specific, withdrawable)."""
+
+    __tablename__ = "user_consents"
+    __table_args__ = (
+        UniqueConstraint("user_id", "consent_scope", name="uq_uc_user_scope"),
+    )
+
+    id: Mapped[str] = mapped_column(UUIDChar(), primary_key=True, default=new_uuid)
+    user_id: Mapped[str] = mapped_column(UUIDChar(), ForeignKey("users.id"), nullable=False)
+    consent_scope: Mapped[str] = mapped_column(String(64), nullable=False)
+    policy_version: Mapped[str] = mapped_column(String(32), default="2026-11-v1", nullable=False)
+    granted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    source_surface: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    ip_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    granted_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    withdrawn_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow, nullable=False)

@@ -404,6 +404,8 @@ def execute_user_deletion(
     if allow_purge_if_clean and not _has_blocking_references_for_purge(db, user.id, seller, insp):
         try:
             with db.begin_nested():
+                if insp.has_table("user_consents"):
+                    db.execute(text("DELETE FROM user_consents WHERE user_id = :uid"), {"uid": user.id})
                 db.execute(delete(UserRoleAssignment).where(UserRoleAssignment.user_id == user.id))
                 db.delete(user)
                 db.flush()

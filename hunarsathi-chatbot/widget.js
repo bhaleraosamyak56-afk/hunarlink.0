@@ -40,7 +40,7 @@
     "Ask me about Kashmiri crafts, prices, GI Tag verification, wholesale orders, payments, or tracking!";
 
   const OFF_TOPIC_MSG =
-    "I am HunarSathi, the dedicated assistant for HunarLink. I can only answer questions related to the HunarLink platform — such as Kashmiri crafts, prices, artisans, GI Tag verification, orders, escrow payments, wholesale, and delivery. How can I help you on HunarLink today?";
+    "I am HunarSathi, the dedicated assistant for HunarLink. I can only answer questions related to the HunarLink platform — such as Kashmiri crafts, prices, artisans, GI Tag verification, orders, Razorpay & COD payments, wholesale, and delivery. How can I help you on HunarLink today?";
 
   /* Safe lightweight formatter: renders **bold** and `code` via DOM nodes (zero XSS) */
   function renderFormattedText(container, text) {
@@ -66,7 +66,7 @@
   /* Strict HunarLink-only instant fallback when local backend is offline or times out */
   function offlineHunarLinkFallback(text) {
     const q = (text || "").trim().toLowerCase();
-    const isHunarLinkRelated = /(hunarlink|hunarsathi|pashmina|shawl|stole|kani|sozni|jamawar|walnut|wood|carv|papier|mache|mâché|sakhta|naqash|silk|rug|carpet|craft|artisan|ustad|kashmir|srinagar|budgam|anantnag|gi\b|gi-jk|jk-wnt|tag|verify|verification|authentic|purity|micron|passport|price|cost|mrp|order|track|ship|deliver|escrow|cod|pay|upi|cart|wishlist|compare|return|refund|wholesale|b2b|bulk|moq|seller|register|profile|login|care|wash|hi|hello|namaste|salam|thanks|help)/i.test(q);
+    const isHunarLinkRelated = /(hunarlink|hunarsathi|pashmina|shawl|stole|kani|sozni|jamawar|walnut|wood|carv|papier|mache|mâché|sakhta|naqash|silk|rug|carpet|craft|artisan|ustad|kashmir|srinagar|budgam|anantnag|gi\b|gi-jk|jk-wnt|tag|verify|verification|authentic|purity|micron|passport|price|cost|mrp|order|track|ship|deliver|razorpay|cod|pay|upi|cart|wishlist|compare|return|refund|wholesale|b2b|bulk|moq|seller|register|profile|login|care|wash|hi|hello|namaste|salam|thanks|help)/i.test(q);
 
     if (!isHunarLinkRelated) {
       return OFF_TOPIC_MSG;
@@ -89,8 +89,8 @@
     if (/wholesale|b2b|bulk|moq|local seller/i.test(q)) {
       return "HunarLink's **Wholesale Trade Portal** supports both **Bulk Buyers** (inquiries transfer directly to the specified HunarLink Artisan) and **Local Sellers** (inquiries transfer to HunarLink Admin), with tiered discounts (**12%** for 10+ units, **18%** for 25+, **25%** for 50+) and batch GI export seals. Click **Wholesale** in the top navigation bar to start.";
     }
-    if (/order|track|ship|deliver|escrow|pay|cod|upi|refund|return/i.test(q)) {
-      return "HunarLink protects every order with **UPI Escrow, Card Escrow, and Insured Verify-on-Delivery (COD) Escrow** — scan the physical GI QR tag at your doorstep before payment release. Track all 5 stages (**Confirmed → GI Seal Verified → Packed at Loom → Insured Transit → Delivered**) anytime on your **My Orders** page.";
+    if (/order|track|ship|deliver|razorpay|pay|cod|upi|refund|return/i.test(q)) {
+      return "HunarLink protects every order with **Razorpay Standard Checkout (UPI, Cards & NetBanking) and Insured Verify-on-Delivery (COD)** — scan the physical GI QR tag at your doorstep to verify provenance. Track all 5 stages (**Confirmed → GI Seal Verified → Packed at Loom → Insured Transit → Delivered**) anytime on your **My Orders** page.";
     }
     if (/walnut|wood|silk|rug|carpet|sozni|kani/i.test(q)) {
       return "HunarLink curates **5 Heritage Craft Guilds** direct from J&K workshops with 100% artisan payout:\n• **Pashmina & Kani Shawls** (₹19,900–₹2,00,000)\n• **Walnut Woodcarving** (₹1,800–₹2,10,000)\n• **Papier-Mâché Art** (₹450–₹7,250)\n• **Silk-on-Silk Rugs** (₹1,10,150–₹1,90,000)\n• **Kani Jamawar & Sozni Needlework** (₹9,000–₹50,000)";
@@ -101,7 +101,7 @@
     if (/seller|artisan|register|portal|dashboard/i.test(q)) {
       return "J&K artisans can register via the **Artisan Portal** with GI Certification (GI ID, live certificate photo, workshop video & passport photo) or as a Standard Artisan to manage listings, retail orders, and wholesale requests.";
     }
-    return "On HunarLink, you can shop GI-certified Kashmiri crafts directly from 2,400+ verified J&K artisans with zero middleman cut. Ask me about Pashmina or Papier-Mâché prices, GI verification, Walnut/Silk Rugs, Wholesale bulk orders, escrow payments, or order tracking!";
+    return "On HunarLink, you can shop GI-certified Kashmiri crafts directly from 2,400+ verified J&K artisans with zero middleman cut. Ask me about Pashmina or Papier-Mâché prices, GI verification, Walnut/Silk Rugs, Wholesale bulk orders, Razorpay & COD payments, or order tracking!";
   }
 
   function fetchWithTimeout(url, options, timeoutMs) {
@@ -158,7 +158,7 @@
       <div class="hs-chips-bar">
         <button type="button" class="hs-chip" data-q="What are the Pashmina prices on HunarLink?">Pashmina Prices</button>
         <button type="button" class="hs-chip" data-q="How does HunarLink GI verification work?">GI Verification</button>
-        <button type="button" class="hs-chip" data-q="How do escrow payment and order tracking work?">Orders &amp; Escrow</button>
+        <button type="button" class="hs-chip" data-q="How do Razorpay payment and order tracking work?">Orders &amp; Payments</button>
         <button type="button" class="hs-chip" data-q="Tell me about Papier-Mâché and Wholesale bulk orders.">Papier-Mâché &amp; Bulk</button>
       </div>
 

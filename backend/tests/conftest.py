@@ -57,8 +57,13 @@ from app.models.core_models import (
     WholesaleRFQ,
 )
 from app.models.guardrail_models import GuardrailRule
+from app.modules.guardrails.router import _document_upload_limiter
 from app.modules.payments.router import get_razorpay_gateway, payment_rate_limiter
-from app.modules.storefront.router import artisan_lookup_rate_limiter, product_lookup_rate_limiter
+from app.modules.storefront.router import (
+    artisan_lookup_rate_limiter,
+    product_lookup_rate_limiter,
+    review_write_rate_limiter,
+)
 
 
 @dataclass
@@ -200,6 +205,8 @@ def app_and_client(
     payment_rate_limiter._hits.clear()
     artisan_lookup_rate_limiter._hits.clear()
     product_lookup_rate_limiter._hits.clear()
+    review_write_rate_limiter._hits.clear()
+    _document_upload_limiter._hits.clear()
     app = create_app(settings_override=test_settings)
 
     def _override_db():

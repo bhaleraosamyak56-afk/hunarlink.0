@@ -10,6 +10,7 @@ import WishlistDrawer from './components/WishlistDrawer.jsx';
 import CompareBar from './components/CompareBar.jsx';
 import Toasts from './components/Toasts.jsx';
 import ChatWidget from './components/ChatWidget.jsx';
+import CookieConsentBanner from './components/CookieConsentBanner.jsx';
 import AmbientField from './components/AmbientField.jsx';
 import ErrorBoundary from './components/ErrorBoundary.jsx';
 import ScrollToTop from './components/ScrollToTop.jsx';
@@ -47,6 +48,7 @@ const ProfilePage = lazy(() => import('./pages/ProfilePage.jsx'));
 const ArtisansPage = lazy(() => import('./pages/ArtisansPage.jsx'));
 const ArtisanProfilePage = lazy(() => import('./pages/ArtisanProfilePage.jsx'));
 const SsoCallbackPage = lazy(() => import('./pages/SsoCallbackPage.jsx'));
+const PrivacyPromisePage = lazy(() => import('./pages/PrivacyPromisePage.jsx'));
 import NotFound from './pages/NotFound.jsx';
 import SpaRedirect from './pages/SpaRedirect.jsx';
 import usePageTitle from './utils/usePageTitle.js';
@@ -253,6 +255,7 @@ export default function App() {
         <Route path="/orders.html" element={<OrdersPage />} />
         <Route path="/profile" element={<ProfilePage />} />
         <Route path="/profile.html" element={<ProfilePage />} />
+        <Route path="/privacy" element={<PrivacyPromisePage />} />
         <Route path="*" element={<NotFound />} />
       </Routes>
       </Suspense>
@@ -270,6 +273,7 @@ export default function App() {
       {ui.modal?.type === 'checkout' && <CheckoutModal />}
       {ui.modal?.type === 'orders' && <OrdersModal />}
       <Toasts />
+      <CookieConsentBanner />
       <ChatWidget />
     </>
   );

@@ -11,7 +11,7 @@ import { IconHome, IconLogin, IconPackage, IconReceipt, IconSearchScan, IconShie
    --------------------------------------------------------------------------
    The same two-column workspace as the static build: account and filters on
    the left, one card per order on the right with a five-stage tracker, the
-   delivery record, the escrow breakdown, and an inline review form that writes
+   delivery record, the Razorpay / COD breakdown, and an inline review form that writes
    straight into the same reviews key the seller portal reads.
 
    Filtering and searching were a full re-render of a string of markup; here
@@ -19,7 +19,7 @@ import { IconHome, IconLogin, IconPackage, IconReceipt, IconSearchScan, IconShie
    ========================================================================== */
 
 const ORDER_STAGES = [
-  { label: 'Order Confirmed', desc: 'Received by HunarLink Escrow' },
+  { label: 'Order Confirmed', desc: 'Confirmed via HunarLink Checkout' },
   { label: 'GI Seal Verified', desc: 'Lab purity & laser QR sealed' },
   { label: 'Packed at Loom', desc: 'Insured Kashmiri heirloom box' },
   { label: 'Out for Delivery', desc: 'Tracked insured transit' },
@@ -331,7 +331,7 @@ function OrderCard({ order: o, user, draft, onDraft, onAdvance, onReview }) {
           <div style={{ fontSize: '0.76rem', color: 'var(--text-500)' }}>
             Ordered on <strong>{o.date || 'Recent'}</strong>
             {o.time ? ` at ${o.time}` : ''} &bull;{' '}
-            <strong>{o.paymentMethod || 'UPI Verified Escrow'}</strong>
+            <strong>{o.paymentMethod || 'Razorpay Standard Checkout'}</strong>
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -511,7 +511,7 @@ function OrderCard({ order: o, user, draft, onDraft, onAdvance, onReview }) {
           </div>
 
           <div className="fk-info-box">
-            <h4><IconReceipt size={15} /> Price &amp; Escrow Details</h4>
+            <h4><IconReceipt size={15} /> Price &amp; Payment Details</h4>
             <div className="fk-price-line">
               <span>Craft Subtotal</span>
               <span>{formatINR(subtotal)}</span>
@@ -538,7 +538,7 @@ function OrderCard({ order: o, user, draft, onDraft, onAdvance, onReview }) {
                 marginTop: 6
               }}
             >
-              <IconShield size={15} /> {o.paymentStatus || 'Protected by HunarLink Escrow'}
+              <IconShield size={15} /> {o.paymentStatus || 'Verified by Razorpay Checkout'}
             </div>
           </div>
         </div>

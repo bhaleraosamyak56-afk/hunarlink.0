@@ -41,6 +41,7 @@ from app.models.core_models import (
     SupplierPurchaseOrder,
     SupplierPurchaseOrderItem,
     User,
+    UserConsent,
     UserLoginLog,
     UserRoleAssignment,
     Warehouse,

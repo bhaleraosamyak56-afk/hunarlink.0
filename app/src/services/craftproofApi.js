@@ -115,15 +115,16 @@ export function matchDemandBridge(payload, token = null) {
   });
 }
 
-export function dispatchDemandInquiries(requestId, payload) {
+export function dispatchDemandInquiries(requestId, payload, token = null) {
   return cpRequest(`/demand-bridge/requests/${encodeURIComponent(requestId)}/dispatch-inquiries`, {
     method: 'POST',
+    token,
     body: payload
   });
 }
 
-export function fetchRecentDemandRequests() {
-  return cpRequest('/demand-bridge/requests');
+export function fetchRecentDemandRequests(token = null) {
+  return cpRequest('/demand-bridge/requests', { token });
 }
 
 export function fetchSellerClusterOffers(token) {

@@ -179,6 +179,7 @@ class CreateProductReviewRequest(BaseModel):
     title: str | None = Field(default=None, max_length=160)
     review_body: str = Field(..., min_length=5, max_length=2000)
     author_city: str | None = Field(default=None, max_length=100)
+    is_anonymous: bool = False
 
 
 class ProductReviewItem(BaseModel):
@@ -186,6 +187,7 @@ class ProductReviewItem(BaseModel):
     product_id: str
     author_name: str
     author_city: str = "India"
+    is_anonymous: bool = False
     rating: int
     title: str | None = None
     review_body: str

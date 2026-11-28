@@ -527,10 +527,16 @@ export default function AuthMarkup(props) {
             </div>
           </div>
 
-          {/* Terms & Policy */}
+          {/* DPDP Privacy & 18+ Policy */}
           <label className="terms-label">
             <input type="checkbox" id="artisan-reg-terms" required checked={!!reg.terms} onChange={setRegField('terms')} />
-            <span>I agree to the <button type="button" className="terms-inline-link" onClick={() => flash('Terms of Service: artisan onboarding charter (demo)')}>Terms of Service</button> and <button type="button" className="terms-inline-link" onClick={() => flash('Privacy Policy: demo camera captures stay in this browser and are not uploaded.')}>Privacy Policy</button></span>
+            <span>
+              I confirm I am 18+ and agree to the{' '}
+              <a href="/privacy" className="terms-inline-link" style={{ textDecoration: 'underline' }}>
+                HunarLink DPDP Privacy Notice &amp; Artisan Verification Charter
+              </a>
+              .
+            </span>
           </label>
 
           {/* Submit Button */}

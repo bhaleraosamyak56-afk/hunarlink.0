@@ -12,13 +12,19 @@ from app.core.auth import (
 )
 from app.core.config import Settings, get_settings
 from app.core.database import get_db
+from app.models.base import utcnow
 from app.models.core_models import Product, SellerProductListing, SellerProfile
 from app.models.craftproof_models import (
     CraftClaimEvidence,
     CraftPassport,
     CraftProductClaim,
 )
-from app.modules.craftproof.qr import generate_passport_qr_svg
+from app.modules.craftproof.qr import (
+    generate_passport_qr_svg,
+    make_passport_serial,
+    sign_passport_qr,
+    verify_passport_qr_signature,
+)
 from app.modules.craftproof.schemas import (
     AdminClaimDecisionIn,
     AttachEvidenceIn,
@@ -117,13 +123,21 @@ def get_passport_qr_svg(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> Response:
-    """Return a scannable SVG QR code linking straight to the public Craft Passport page."""
+    """Return a scannable HMAC-signed SVG QR code linking straight to the public Craft Passport."""
     passport = resolve_passport_by_code_or_slug(db, code_or_slug)
     if passport is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Craft Passport not found.")
 
+    serial_number = passport.serial_number or make_passport_serial(
+        passport.passport_code, passport.listing_id
+    )
+    sig = sign_passport_qr(
+        passport_code=passport.passport_code,
+        serial_number=serial_number,
+        secret=settings.qr_signing_secret,
+    )
     base = (settings.frontend_base_url or "http://localhost:5173").rstrip("/")
-    passport_url = f"{base}/passport/{passport.passport_code}"
+    passport_url = f"{base}/passport/{passport.passport_code}?sig={sig}"
     svg_bytes = generate_passport_qr_svg(passport_url)
     return Response(
         content=svg_bytes,
@@ -135,17 +149,44 @@ def get_passport_qr_svg(
 @router.get("/passports/{code_or_slug}")
 def get_passport_public(
     code_or_slug: str,
+    sig: str | None = Query(default=None, max_length=64),
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> dict:
-    """Public Craft Passport endpoint separating verified facts from artisan declarations."""
+    """Public Craft Passport endpoint verifying optional QR HMAC signature & scan telemetry."""
     passport = resolve_passport_by_code_or_slug(db, code_or_slug)
     if passport is None or not passport.is_public:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Craft Passport not found.",
         )
-    return serialize_passport_public(db, passport, api_prefix=settings.api_v1_prefix)
+
+    serial_number = passport.serial_number or make_passport_serial(
+        passport.passport_code, passport.listing_id
+    )
+    signature_valid: bool | None = None
+    if sig is not None:
+        signature_valid = verify_passport_qr_signature(
+            passport_code=passport.passport_code,
+            serial_number=serial_number,
+            sig=sig,
+            secret=settings,
+        )
+        if signature_valid:
+            if not passport.serial_number:
+                passport.serial_number = serial_number
+            if passport.first_scanned_at is None:
+                passport.first_scanned_at = utcnow()
+            passport.scan_count = int(passport.scan_count or 0) + 1
+            db.commit()
+            db.refresh(passport)
+
+    return serialize_passport_public(
+        db,
+        passport,
+        api_prefix=settings.api_v1_prefix,
+        signature_valid=signature_valid,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +223,20 @@ def create_or_get_seller_passport(
         preserve_existing_gi_verification=False,
     )
     db.commit()
-    return serialize_passport_public(db, passport, api_prefix=settings.api_v1_prefix)
+    serial_number = passport.serial_number or make_passport_serial(
+        passport.passport_code, passport.listing_id
+    )
+    sig = sign_passport_qr(
+        passport_code=passport.passport_code,
+        serial_number=serial_number,
+        secret=settings.qr_signing_secret,
+    )
+    return serialize_passport_public(
+        db,
+        passport,
+        api_prefix=settings.api_v1_prefix,
+        include_qr_signature=sig,
+    )
 
 
 @router.post("/seller/passports/{passport_id}/claims", status_code=status.HTTP_201_CREATED)

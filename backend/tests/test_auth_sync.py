@@ -409,8 +409,10 @@ def test_07_admin_password_login_allows_only_db_provisioned_admins_and_revocatio
     creds_list = ov.json()["admin_credentials"]
     assert len(creds_list) == 1
     assert creds_list[0]["email"] == admin_user.email
-    assert creds_list[0]["password_hash"].startswith("pbkdf2_sha256$")
-    assert secret_pw not in creds_list[0]["password_hash"]
+    assert "password_hash" not in creds_list[0]
+    assert creds_list[0]["password_configured"] is True
+    assert creds_list[0]["hash_algorithm"] == "pbkdf2_sha256"
+    assert secret_pw not in str(creds_list[0])
     admin_row = next(u for u in ov.json()["users"] if u["email"] == admin_user.email)
     assert admin_row["onboarding_state"] == "ADMIN"
 
