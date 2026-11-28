@@ -30,7 +30,9 @@ import {
   IconPackage,
   IconReceipt,
   IconShield,
-  IconLogout
+  IconLogout,
+  IconSearchScan,
+  IconX
 } from '../../components/LineIcons.jsx';
 
 /* ==========================================================================
@@ -88,6 +90,8 @@ export default function AdminPage() {
   const [tab, setTab] = useState('overview');
   const [roleFilter, setRoleFilter] = useState('buyers');
   const [activityFilter, setActivityFilter] = useState('registered');
+  const [userSearch, setUserSearch] = useState('');
+  const [sellerSearch, setSellerSearch] = useState('');
   const [loading, setLoading] = useState(false);
   const [revealedHashes, setRevealedHashes] = useState({});
   const [cardPreviewModal, setCardPreviewModal] = useState(null);
@@ -509,19 +513,63 @@ export default function AdminPage() {
             { id: 'wholesale', label: 'Wholesale / Dealers', data: roleDir.wholesale },
             { id: 'admins', label: 'Admins (ADMIN)', data: roleDir.admins }
           ];
-          const activeGroup = roleDir[roleFilter] || {
-            label: 'Users',
-            counts: { registered: 0, logged_in: 0, never_logged_in: 0, total_login_events: 0 },
-            registered: [],
-            logged_in: [],
-            never_logged_in: []
+          const searchQ = userSearch.trim().toLowerCase();
+          const matchesUserQuery = (u) => {
+            if (!searchQ) return true;
+            return [
+              u.name,
+              u.email,
+              u.phone,
+              u.store_name,
+              u.role_code,
+              u.user_id,
+              u.clerk_user_id,
+              u.verification_status,
+              u.account_status
+            ]
+              .filter(Boolean)
+              .join(' ')
+              .toLowerCase()
+              .includes(searchQ);
           };
-          const selectedRows =
+
+          const combinedGroup = {
+            label: 'All Roles',
+            counts: {
+              registered: roleTabs.reduce((acc, rt) => acc + (rt.data?.counts?.registered ?? 0), 0),
+              logged_in: roleTabs.reduce((acc, rt) => acc + (rt.data?.counts?.logged_in ?? 0), 0),
+              never_logged_in: roleTabs.reduce((acc, rt) => acc + (rt.data?.counts?.never_logged_in ?? 0), 0),
+              total_login_events: roleTabs.reduce((acc, rt) => acc + (rt.data?.counts?.total_login_events ?? 0), 0)
+            },
+            registered: roleTabs.flatMap((rt) => rt.data?.registered || []),
+            logged_in: roleTabs.flatMap((rt) => rt.data?.logged_in || []),
+            never_logged_in: roleTabs.flatMap((rt) => rt.data?.never_logged_in || [])
+          };
+
+          const activeGroup =
+            roleFilter === 'all'
+              ? combinedGroup
+              : roleDir[roleFilter] || {
+                  label: 'Users',
+                  counts: { registered: 0, logged_in: 0, never_logged_in: 0, total_login_events: 0 },
+                  registered: [],
+                  logged_in: [],
+                  never_logged_in: []
+                };
+
+          const getRoleRowsForActivity = (group) =>
             activityFilter === 'logged_in'
-              ? activeGroup.logged_in || []
+              ? group?.logged_in || []
               : activityFilter === 'never_logged_in'
-                ? activeGroup.never_logged_in || []
-                : activeGroup.registered || [];
+                ? group?.never_logged_in || []
+                : group?.registered || [];
+
+          const rawSelectedRows = getRoleRowsForActivity(activeGroup);
+          const selectedRows = rawSelectedRows.filter(matchesUserQuery);
+          const totalAllRoleMatches = searchQ
+            ? getRoleRowsForActivity(combinedGroup).filter(matchesUserQuery).length
+            : combinedGroup.counts.registered;
+
           const roleCodeSetByFilter = {
             buyers: new Set(['CUSTOMER']),
             artisans: new Set(['DIRECT_SELLER']),
@@ -529,8 +577,14 @@ export default function AdminPage() {
             admins: new Set(['ADMIN'])
           };
           const filteredAuthEvents = (ov.recent_auth_events || []).filter((ev) => {
-            const allowed = roleCodeSetByFilter[roleFilter];
-            return !allowed || allowed.has(ev.role_code);
+            const allowed = roleFilter === 'all' ? null : roleCodeSetByFilter[roleFilter];
+            if (allowed && !allowed.has(ev.role_code)) return false;
+            if (!searchQ) return true;
+            return [ev.name, ev.email, ev.role_code, ev.auth_method, ev.ip_address, ev.user_id]
+              .filter(Boolean)
+              .join(' ')
+              .toLowerCase()
+              .includes(searchQ);
           });
 
           return (
@@ -557,6 +611,81 @@ export default function AdminPage() {
                 </div>
               </div>
 
+              {/* Search bar across users & roles */}
+              <div
+                style={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: '0.6rem',
+                  alignItems: 'center',
+                  marginBottom: '1rem'
+                }}
+              >
+                <div
+                  style={{
+                    position: 'relative',
+                    flex: '1 1 280px',
+                    display: 'flex',
+                    alignItems: 'center'
+                  }}
+                >
+                  <span
+                    style={{
+                      position: 'absolute',
+                      left: '0.75rem',
+                      display: 'inline-flex',
+                      opacity: 0.55,
+                      pointerEvents: 'none'
+                    }}
+                  >
+                    <IconSearchScan size={16} />
+                  </span>
+                  <input
+                    id="admin-user-search"
+                    type="search"
+                    className="up-input"
+                    aria-label="Search users by name, email, store name, phone, or ID"
+                    placeholder="Search user by name, email, store name, phone, or ID…"
+                    value={userSearch}
+                    onChange={(e) => setUserSearch(e.target.value)}
+                    style={{
+                      width: '100%',
+                      paddingLeft: '2.2rem',
+                      paddingRight: userSearch ? '2.2rem' : '0.85rem'
+                    }}
+                  />
+                  {userSearch && (
+                    <button
+                      type="button"
+                      aria-label="Clear search"
+                      onClick={() => setUserSearch('')}
+                      style={{
+                        position: 'absolute',
+                        right: '0.55rem',
+                        border: 'none',
+                        background: 'transparent',
+                        cursor: 'pointer',
+                        padding: '0.25rem',
+                        display: 'inline-flex',
+                        opacity: 0.65
+                      }}
+                    >
+                      <IconX size={14} />
+                    </button>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  className={roleFilter === 'all' ? 'btn-orange' : 'btn-orange-outline'}
+                  style={{ padding: '0.52rem 0.9rem', fontSize: '0.82rem', whiteSpace: 'nowrap' }}
+                  onClick={() => setRoleFilter(roleFilter === 'all' ? 'buyers' : 'all')}
+                >
+                  {roleFilter === 'all'
+                    ? `All Roles (${combinedGroup.counts.registered})`
+                    : `Search All Roles (${combinedGroup.counts.registered})`}
+                </button>
+              </div>
+
               {/* Per-role summary cards */}
               <div
                 style={{
@@ -569,6 +698,9 @@ export default function AdminPage() {
                 {roleTabs.map((rt) => {
                   const counts = rt.data?.counts || { registered: 0, logged_in: 0, never_logged_in: 0 };
                   const isActive = roleFilter === rt.id;
+                  const roleMatches = searchQ
+                    ? getRoleRowsForActivity(rt.data).filter(matchesUserQuery).length
+                    : null;
                   return (
                     <button
                       key={rt.id}
@@ -588,34 +720,58 @@ export default function AdminPage() {
                         <span><strong>{counts.registered}</strong> Registered</span>
                         <span style={{ color: '#1b6d3f' }}><strong>{counts.logged_in}</strong> Logged In</span>
                       </div>
+                      {roleMatches !== null && (
+                        <div
+                          style={{
+                            marginTop: '0.3rem',
+                            fontSize: '0.74rem',
+                            fontWeight: 700,
+                            color: roleMatches > 0 ? '#a34121' : 'rgba(0,0,0,0.45)'
+                          }}
+                        >
+                          {roleMatches} {roleMatches === 1 ? 'match' : 'matches'}
+                        </div>
+                      )}
                     </button>
                   );
                 })}
               </div>
 
               {/* Activity split selector */}
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem', marginBottom: '1rem' }}>
-                {[
-                  { id: 'registered', label: `All Registered (${activeGroup.counts?.registered ?? 0})` },
-                  { id: 'logged_in', label: `Logged-In Users (${activeGroup.counts?.logged_in ?? 0})` },
-                  { id: 'never_logged_in', label: `Registered Only / Never Logged In (${activeGroup.counts?.never_logged_in ?? 0})` },
-                  { id: 'events', label: `Login & Registration Logs (${filteredAuthEvents.length})` }
-                ].map((f) => (
-                  <button
-                    key={f.id}
-                    type="button"
-                    className={activityFilter === f.id ? 'btn-orange' : 'btn-orange-outline'}
-                    style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}
-                    onClick={() => setActivityFilter(f.id)}
-                  >
-                    {f.label}
-                  </button>
-                ))}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem', marginBottom: '1rem', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
+                  {[
+                    { id: 'registered', label: `All Registered (${activeGroup.counts?.registered ?? 0})` },
+                    { id: 'logged_in', label: `Logged-In Users (${activeGroup.counts?.logged_in ?? 0})` },
+                    { id: 'never_logged_in', label: `Registered Only / Never Logged In (${activeGroup.counts?.never_logged_in ?? 0})` },
+                    { id: 'events', label: `Login & Registration Logs (${filteredAuthEvents.length})` }
+                  ].map((f) => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      className={activityFilter === f.id ? 'btn-orange' : 'btn-orange-outline'}
+                      style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}
+                      onClick={() => setActivityFilter(f.id)}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+                {searchQ && activityFilter !== 'events' && (
+                  <div style={{ fontSize: '0.8rem', opacity: 0.78 }}>
+                    Showing <strong>{selectedRows.length}</strong> of {rawSelectedRows.length} in{' '}
+                    <strong>{activeGroup.label}</strong>
+                  </div>
+                )}
               </div>
 
               {activityFilter === 'events' ? (
                 filteredAuthEvents.length === 0 ? (
-                  <p style={{ opacity: 0.7 }}>No registration or login events recorded for this role yet.</p>
+                  <p style={{ opacity: 0.7 }}>
+                    {searchQ
+                      ? `No login or registration logs matched "${userSearch.trim()}".`
+                      : 'No registration or login events recorded for this role yet.'}
+                  </p>
                 ) : (
                   <div style={{ overflowX: 'auto' }}>
                     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.86rem' }}>
@@ -662,7 +818,23 @@ export default function AdminPage() {
                   </div>
                 )
               ) : selectedRows.length === 0 ? (
-                <p style={{ opacity: 0.7 }}>No users in this role &amp; login status category yet.</p>
+                <div style={{ padding: '0.5rem 0' }}>
+                  <p style={{ opacity: 0.72, marginBottom: searchQ && roleFilter !== 'all' && totalAllRoleMatches > 0 ? '0.6rem' : 0 }}>
+                    {searchQ
+                      ? `No users matched "${userSearch.trim()}" in ${activeGroup.label}.`
+                      : 'No users in this role & login status category yet.'}
+                  </p>
+                  {searchQ && roleFilter !== 'all' && totalAllRoleMatches > 0 && (
+                    <button
+                      type="button"
+                      className="btn-orange-outline"
+                      style={{ padding: '0.35rem 0.8rem', fontSize: '0.8rem' }}
+                      onClick={() => setRoleFilter('all')}
+                    >
+                      Show {totalAllRoleMatches} matching {totalAllRoleMatches === 1 ? 'user' : 'users'} across All Roles
+                    </button>
+                  )}
+                </div>
               ) : (
                 <div style={{ overflowX: 'auto' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.87rem' }}>
@@ -971,9 +1143,55 @@ export default function AdminPage() {
           </section>
         )}
 
-        {tab === 'sellers' && (
+        {tab === 'sellers' && (() => {
+          const sq = sellerSearch.trim().toLowerCase();
+          const filteredSellers = (ov.sellers || []).filter((s) => {
+            if (!sq) return true;
+            return [s.store_name, s.workshop_district, s.craft_specialty, s.claimed_gi_code, s.verification_status, s.profile_status, s.id]
+              .filter(Boolean)
+              .join(' ')
+              .toLowerCase()
+              .includes(sq);
+          });
+          const filteredListings = (ov.listings || []).filter((l) => {
+            if (!sq) return true;
+            return [l.sku, l.title, l.status, l.id]
+              .filter(Boolean)
+              .join(' ')
+              .toLowerCase()
+              .includes(sq);
+          });
+
+          return (
           <section className="fk-panel-card" style={{ padding: '1.25rem' }}>
-            <h2 style={{ marginBottom: '0.9rem' }}>Artisan Profiles &amp; Listings (Live DB)</h2>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '0.95rem' }}>
+              <h2 style={{ margin: 0 }}>Artisan Profiles &amp; Listings (Live DB)</h2>
+              <div style={{ position: 'relative', minWidth: '260px', flex: '0 1 360px', display: 'flex', alignItems: 'center' }}>
+                <span style={{ position: 'absolute', left: '0.75rem', display: 'inline-flex', opacity: 0.55, pointerEvents: 'none' }}>
+                  <IconSearchScan size={16} />
+                </span>
+                <input
+                  id="admin-seller-search"
+                  type="search"
+                  className="up-input"
+                  aria-label="Search artisan workshops, districts, GI codes, or listing SKUs"
+                  placeholder="Search workshop, district, GI code, or SKU…"
+                  value={sellerSearch}
+                  onChange={(e) => setSellerSearch(e.target.value)}
+                  style={{ width: '100%', paddingLeft: '2.2rem', paddingRight: sellerSearch ? '2.2rem' : '0.85rem' }}
+                />
+                {sellerSearch && (
+                  <button
+                    type="button"
+                    aria-label="Clear artisan search"
+                    onClick={() => setSellerSearch('')}
+                    style={{ position: 'absolute', right: '0.55rem', border: 'none', background: 'transparent', cursor: 'pointer', padding: '0.25rem', display: 'inline-flex', opacity: 0.65 }}
+                  >
+                    <IconX size={14} />
+                  </button>
+                )}
+              </div>
+            </div>
             <div style={{ overflowX: 'auto', marginBottom: '1.5rem' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.88rem' }}>
                 <thead>
@@ -986,7 +1204,13 @@ export default function AdminPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {(ov.sellers || []).map((s) => (
+                  {filteredSellers.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} style={{ padding: '0.75rem 0.55rem', opacity: 0.7 }}>
+                        No artisan workshops matched &ldquo;{sellerSearch.trim()}&rdquo;.
+                      </td>
+                    </tr>
+                  ) : filteredSellers.map((s) => (
                     <tr key={s.id} style={{ borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
                       <td style={{ padding: '0.55rem', fontWeight: 600 }}>{s.store_name}</td>
                       <td style={{ padding: '0.55rem' }}>{s.workshop_district || '—'}</td>
@@ -1034,7 +1258,13 @@ export default function AdminPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {(ov.listings || []).map((l) => (
+                  {filteredListings.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} style={{ padding: '0.75rem 0.55rem', opacity: 0.7 }}>
+                        No craft listings matched &ldquo;{sellerSearch.trim()}&rdquo;.
+                      </td>
+                    </tr>
+                  ) : filteredListings.map((l) => (
                     <tr key={l.id} style={{ borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
                       <td style={{ padding: '0.55rem', fontFamily: 'monospace' }}>{l.sku}</td>
                       <td style={{ padding: '0.55rem' }}>{l.title}</td>
@@ -1080,7 +1310,8 @@ export default function AdminPage() {
               </table>
             </div>
           </section>
-        )}
+          );
+        })()}
 
         {tab === 'orders' && (
           <section className="fk-panel-card" style={{ padding: '1.25rem' }}>

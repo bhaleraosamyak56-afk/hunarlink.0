@@ -342,10 +342,11 @@ export function fetchAdminOverview(token) {
   return apiRequest('/api/v1/admin/overview', { token });
 }
 
-export function fetchAdminUsersByRole(token, { roleCode = null, activity = 'all' } = {}) {
+export function fetchAdminUsersByRole(token, { roleCode = null, activity = 'all', q = null } = {}) {
   const params = new URLSearchParams();
   if (roleCode) params.set('role_code', roleCode);
   if (activity) params.set('activity', activity);
+  if (q && q.trim()) params.set('q', q.trim());
   const qs = params.toString() ? `?${params.toString()}` : '';
   return apiRequest(`/api/v1/admin/users-by-role${qs}`, { token });
 }

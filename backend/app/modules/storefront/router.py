@@ -787,7 +787,7 @@ def admin_live_overview(
     db: Session = Depends(get_db),
 ) -> dict:
     """Strictly admin-only real database snapshot for the Admin Console."""
-    all_users = list(db.scalars(select(User).order_by(User.created_at.desc()).limit(200)).all())
+    all_users = list(db.scalars(select(User).order_by(User.created_at.desc()).limit(2000)).all())
     users = [
         u
         for u in all_users
@@ -798,7 +798,7 @@ def admin_live_overview(
     ]
     deactivated_count = len(all_users) - len(users)
     active_user_ids = {u.id for u in users}
-    all_sellers = list(db.scalars(select(SellerProfile).order_by(SellerProfile.created_at.desc()).limit(200)).all())
+    all_sellers = list(db.scalars(select(SellerProfile).order_by(SellerProfile.created_at.desc()).limit(2000)).all())
     sellers = [
         s
         for s in all_sellers
@@ -808,14 +808,14 @@ def admin_live_overview(
         db.scalars(
             select(SellerVerificationApplication)
             .order_by(SellerVerificationApplication.created_at.desc())
-            .limit(200)
+            .limit(1000)
         ).all()
     )
     seller_docs = list(
-        db.scalars(select(SellerDocument).order_by(SellerDocument.created_at.desc()).limit(300)).all()
+        db.scalars(select(SellerDocument).order_by(SellerDocument.created_at.desc()).limit(1000)).all()
     )
     listings = list(
-        db.scalars(select(SellerProductListing).order_by(SellerProductListing.created_at.desc()).limit(200)).all()
+        db.scalars(select(SellerProductListing).order_by(SellerProductListing.created_at.desc()).limit(1000)).all()
     )
     orders = list(db.scalars(select(RetailOrder).order_by(RetailOrder.created_at.desc()).limit(100)).all())
     admin_creds = list(
@@ -1209,6 +1209,7 @@ def admin_live_overview(
 def admin_users_by_role(
     role_code: str | None = None,
     activity: str = "all",
+    q: str | None = None,
     admin: AuthenticatedPrincipal = Depends(require_admin_permission("payments.read")),
     db: Session = Depends(get_db),
 ) -> dict:
@@ -1216,6 +1217,24 @@ def admin_users_by_role(
     snapshot = admin_live_overview(admin=admin, db=db)
     role_dir = snapshot["role_directory"]
     recent_events = snapshot["recent_auth_events"]
+    search_term = (q or "").strip().lower()
+
+    def _matches_user(item: dict) -> bool:
+        if not search_term:
+            return True
+        haystack = " ".join(
+            str(v or "")
+            for v in (
+                item.get("name"),
+                item.get("email"),
+                item.get("phone"),
+                item.get("store_name"),
+                item.get("role_code"),
+                item.get("user_id"),
+                item.get("clerk_user_id"),
+            )
+        ).lower()
+        return search_term in haystack
 
     code_map = {
         "CUSTOMER": "buyers",
@@ -1252,24 +1271,30 @@ def admin_users_by_role(
             rows = group["never_logged_in"]
         else:
             rows = group["registered"]
+        filtered_rows = [row for row in rows if _matches_user(row)]
         result_groups[key] = {
             "label": group["label"],
             "counts": group["counts"],
-            "users": rows,
+            "users": filtered_rows,
         }
 
-    filtered_events = (
-        [
-            ev
-            for ev in recent_events
-            if code_map.get(ev["role_code"]) == selected_key
-        ]
-        if selected_key
-        else recent_events
-    )
+    filtered_events = [
+        ev
+        for ev in recent_events
+        if (not selected_key or code_map.get(ev["role_code"]) == selected_key)
+        and (
+            not search_term
+            or search_term
+            in " ".join(
+                str(ev.get(k) or "")
+                for k in ("name", "email", "role_code", "auth_method", "ip_address", "user_id")
+            ).lower()
+        )
+    ]
     return {
         "role_filter": selected_key or "all",
         "activity_filter": norm_activity,
+        "q": search_term or None,
         "groups": result_groups,
         "recent_auth_events": filtered_events,
     }

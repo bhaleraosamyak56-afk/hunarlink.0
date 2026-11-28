@@ -960,6 +960,12 @@ def test_11_admin_overview_and_users_by_role_separate_registered_vs_logged_in(
     assert "buyer.regonly@example.com" in regonly_emails
     assert "buyer.active@example.com" not in regonly_emails
 
+    res_search = client.get("/api/v1/admin/users-by-role?q=buyer.active")
+    assert res_search.status_code == 200
+    assert res_search.json()["q"] == "buyer.active"
+    searched_emails = {u["email"] for u in res_search.json()["groups"]["buyers"]["users"]}
+    assert searched_emails == {"buyer.active@example.com"}
+
     app.dependency_overrides.pop(get_current_principal, None)
 
 
