@@ -1036,6 +1036,139 @@ function ClerkBridgeInner({ children }) {
     [clerk, signIn, signInLoaded]
   );
 
+  const sendPasswordResetCode = useCallback(
+    async (emailAddress, role = 'buyer') => {
+      const cleaned = String(emailAddress || '').trim().toLowerCase();
+      if (!cleaned || !cleaned.includes('@')) {
+        throw new Error('Please enter a valid email address.');
+      }
+      const normalizedRole = role === 'artisan' ? 'artisan' : 'buyer';
+      setPendingClerkRole(normalizedRole);
+      setPendingClerkAuthMode('signin');
+
+      if (!signInLoaded || !signIn) {
+        throw new Error('Authentication service is initializing. Please retry.');
+      }
+
+      if (canAttemptBackend()) {
+        try {
+          const acct = await checkAuthAccount(cleaned, normalizedRole);
+          if (acct?.role_conflict) {
+            const roleErr = new Error(
+              acct.conflict_message ||
+                'This email is registered under a different role in HunarLink.'
+            );
+            roleErr.code = 'ROLE_CONFLICT';
+            throw roleErr;
+          }
+          if (acct && acct.exists === false) {
+            const missErr = new Error(
+              'No HunarLink account exists for this email yet. Please switch to Register to create one.'
+            );
+            missErr.code = 'NOT_REGISTERED';
+            throw missErr;
+          }
+        } catch (checkErr) {
+          if (checkErr?.code === 'NOT_REGISTERED' || checkErr?.code === 'ROLE_CONFLICT') {
+            clearPendingClerkRole();
+            clearPendingClerkAuthMode();
+            throw checkErr;
+          }
+        }
+      }
+
+      try {
+        const si = await signIn.create({
+          strategy: 'reset_password_email_code',
+          identifier: cleaned
+        });
+        // If Clerk returned needs_first_factor without preparing verification yet, prepare it explicitly
+        if (
+          si?.status === 'needs_first_factor' &&
+          si?.firstFactorVerification?.status !== 'unverified'
+        ) {
+          const resetFactor = si.supportedFirstFactors?.find(
+            (f) => f.strategy === 'reset_password_email_code'
+          );
+          if (!resetFactor) {
+            throw new Error(
+              'Password reset is not available for this account (it may use Google or Apple login). Try "Sign in with 6-digit email code instead" or Google.'
+            );
+          }
+          await signIn.prepareFirstFactor({
+            strategy: 'reset_password_email_code',
+            emailAddressId: resetFactor.emailAddressId
+          });
+        }
+        return { sent: true, email: cleaned };
+      } catch (err) {
+        clearPendingClerkRole();
+        clearPendingClerkAuthMode();
+        const errCode = err?.errors?.[0]?.code || '';
+        const msg = err?.errors?.[0]?.longMessage || err?.errors?.[0]?.message || err?.message || '';
+        if (errCode === 'form_identifier_not_found' || msg.toLowerCase().includes("couldn't find")) {
+          const missErr = new Error(
+            'No account found for this email yet. Please switch to Register to create one.'
+          );
+          missErr.code = 'NOT_REGISTERED';
+          throw missErr;
+        }
+        throw new Error(msg || 'Could not send password reset code.');
+      }
+    },
+    [signIn, signInLoaded]
+  );
+
+  const completePasswordReset = useCallback(
+    async (code, newPassword) => {
+      const cleanedCode = String(code || '').trim();
+      const pwd = String(newPassword || '');
+      if (!cleanedCode) {
+        throw new Error('Please enter the 6-digit reset code sent to your email.');
+      }
+      if (pwd.length < 15) {
+        throw new Error('New password must be at least 15 characters long.');
+      }
+      if (!signInLoaded || !signIn) {
+        throw new Error('Authentication service is initializing. Please retry.');
+      }
+
+      try {
+        let res = await signIn.attemptFirstFactor({
+          strategy: 'reset_password_email_code',
+          code: cleanedCode,
+          password: pwd
+        });
+        if (res.status === 'needs_new_password') {
+          res = await signIn.resetPassword({
+            password: pwd,
+            signOutOfOtherSessions: true
+          });
+        }
+        if (res.status === 'complete' && res.createdSessionId) {
+          await clerk.setActive({ session: res.createdSessionId });
+          return { status: 'complete' };
+        }
+        if (res.status === 'needs_second_factor') {
+          const emailSecond = res.supportedSecondFactors?.find((f) => f.strategy === 'email_code');
+          if (emailSecond) {
+            await signIn.prepareSecondFactor({
+              strategy: 'email_code',
+              emailAddressId: emailSecond.emailAddressId
+            });
+            return { status: 'needs_second_factor' };
+          }
+          throw new Error('Additional verification is required after password reset.');
+        }
+        throw new Error('Could not complete password reset. Request a fresh reset code and try again.');
+      } catch (err) {
+        const msg = err?.errors?.[0]?.longMessage || err?.errors?.[0]?.message || err?.message || '';
+        throw new Error(msg || 'Invalid or expired reset code, or password did not meet Clerk policy.');
+      }
+    },
+    [clerk, signIn, signInLoaded]
+  );
+
   const sendDeleteVerificationCode = useCallback(async () => {
     const activeSession = clerkSession || clerk?.session;
     if (!isSignedIn || !clerkUser || !activeSession) {
@@ -1189,6 +1322,8 @@ function ClerkBridgeInner({ children }) {
       sendEmailCode,
       verifyEmailCode,
       signInWithPassword,
+      sendPasswordResetCode,
+      completePasswordReset,
       signOutClerk,
       sendDeleteVerificationCode,
       deleteMyAccount,
@@ -1203,6 +1338,8 @@ function ClerkBridgeInner({ children }) {
       sendEmailCode,
       verifyEmailCode,
       signInWithPassword,
+      sendPasswordResetCode,
+      completePasswordReset,
       signOutClerk,
       sendDeleteVerificationCode,
       deleteMyAccount,

@@ -79,7 +79,10 @@ export default function AuthPage() {
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [signInMethod, setSignInMethod] = useState('password'); // 'password' | 'code'
+  const [signInMethod, setSignInMethod] = useState('password'); // 'password' | 'code' | 'forgot'
+  const [forgotStep, setForgotStep] = useState('request'); // 'request' | 'reset'
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [code, setCode] = useState('');
   const [emailStep, setEmailStep] = useState('input'); // 'input' | 'verify'
   const [pendingFlow, setPendingFlow] = useState('signIn');
@@ -402,6 +405,78 @@ export default function AuthPage() {
     }
   }
 
+  async function handleSendPasswordResetCode(e) {
+    e.preventDefault();
+    if (!clerk.sendPasswordResetCode) {
+      setErrMsg('Clerk password reset is unavailable.');
+      return;
+    }
+    setErrMsg('');
+    setEmailBusy(true);
+    try {
+      await clerk.sendPasswordResetCode(email, 'artisan');
+      setCode('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setForgotStep('reset');
+      toast('Password reset code sent to your email.', 'success');
+    } catch (err) {
+      if (err?.code === 'NOT_REGISTERED') {
+        setAuthMode('register');
+        setSignInMethod('password');
+        setForgotStep('request');
+        setErrMsg(
+          err.message ||
+            'No registered HunarLink Artisan account was found for that email. Register below.'
+        );
+      } else {
+        setErrMsg(err?.message || 'Could not send password reset code.');
+      }
+    } finally {
+      setEmailBusy(false);
+    }
+  }
+
+  async function handleCompletePasswordReset(e) {
+    e.preventDefault();
+    if (!clerk.completePasswordReset) {
+      setErrMsg('Clerk password reset is unavailable.');
+      return;
+    }
+    if (newPassword.length < 15) {
+      setErrMsg('New password must be at least 15 characters long.');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setErrMsg('New password and confirmation do not match.');
+      return;
+    }
+    setErrMsg('');
+    setEmailBusy(true);
+    try {
+      const res = await clerk.completePasswordReset(code, newPassword);
+      if (res?.status === 'needs_second_factor') {
+        setPendingFlow('signIn');
+        setSignInMethod('code');
+        setEmailStep('verify');
+        setCode('');
+        toast('Password updated! Enter the 2FA verification code sent to your email.', 'success');
+        return;
+      }
+      setForgotStep('request');
+      setSignInMethod('password');
+      setCode('');
+      setNewPassword('');
+      setConfirmPassword('');
+      toast('Password updated & signed in!', 'success');
+      navigate('/auth?tab=verify', { replace: true });
+    } catch (err) {
+      setErrMsg(err?.message || 'Could not reset password.');
+    } finally {
+      setEmailBusy(false);
+    }
+  }
+
   async function submitVerification(e) {
     e.preventDefault();
     setErrMsg('');
@@ -658,6 +733,8 @@ export default function AuthPage() {
                       className={`seg-btn${authMode === 'signin' ? ' is-on' : ''}`}
                       onClick={() => {
                         setAuthMode('signin');
+                        setSignInMethod('password');
+                        setForgotStep('request');
                         setEmailStep('input');
                         setCode('');
                         setErrMsg('');
@@ -670,6 +747,8 @@ export default function AuthPage() {
                       className={`seg-btn${authMode === 'register' ? ' is-on' : ''}`}
                       onClick={() => {
                         setAuthMode('register');
+                        setSignInMethod('password');
+                        setForgotStep('request');
                         setEmailStep('input');
                         setCode('');
                         setErrMsg('');
@@ -688,7 +767,135 @@ export default function AuthPage() {
                 {clerk.enabled ? (
                   <div className="login-social-section">
                     {emailStep === 'input' ? (
-                      authMode === 'signin' && signInMethod === 'password' ? (
+                      authMode === 'signin' && signInMethod === 'forgot' ? (
+                        forgotStep === 'request' ? (
+                          <form onSubmit={handleSendPasswordResetCode}>
+                            <div className="form-field">
+                              <label className="up-label" htmlFor="artisan-clerk-forgot-email-input">
+                                Account Email Address *
+                              </label>
+                              <input
+                                id="artisan-clerk-forgot-email-input"
+                                type="email"
+                                className="up-input"
+                                placeholder="artisan@example.com"
+                                required
+                                autoComplete="email"
+                                value={email}
+                                onChange={(e) => setEmail(e.target.value)}
+                              />
+                            </div>
+                            <button
+                              type="submit"
+                              className="btn-orange"
+                              style={{ width: '100%', justifyContent: 'center', marginTop: '0.25rem' }}
+                              disabled={emailBusy}
+                            >
+                              <IconShield size={15} />
+                              {emailBusy ? 'Sending reset code…' : 'Send Password Reset Code'}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn-orange-outline"
+                              style={{ width: '100%', justifyContent: 'center', marginTop: '0.5rem' }}
+                              onClick={() => {
+                                setSignInMethod('password');
+                                setForgotStep('request');
+                                setErrMsg('');
+                              }}
+                            >
+                              Back to Sign In
+                            </button>
+                          </form>
+                        ) : (
+                          <form onSubmit={handleCompletePasswordReset}>
+                            <div className="form-field">
+                              <label className="up-label" htmlFor="artisan-clerk-reset-code-input">
+                                6-Digit Reset Code sent to {email} *
+                              </label>
+                              <input
+                                id="artisan-clerk-reset-code-input"
+                                type="text"
+                                inputMode="numeric"
+                                className="up-input"
+                                placeholder="Enter 6-digit reset code"
+                                required
+                                autoComplete="one-time-code"
+                                value={code}
+                                onChange={(e) => setCode(e.target.value)}
+                              />
+                            </div>
+                            <div className="form-field">
+                              <label className="up-label" htmlFor="artisan-clerk-reset-new-password-input">
+                                New Password (min. 15 characters) *
+                              </label>
+                              <input
+                                id="artisan-clerk-reset-new-password-input"
+                                type="password"
+                                className="up-input"
+                                placeholder="Create a new strong password (15+ characters)"
+                                required
+                                minLength={15}
+                                autoComplete="new-password"
+                                value={newPassword}
+                                onChange={(e) => setNewPassword(e.target.value)}
+                              />
+                              <div
+                                style={{
+                                  fontSize: '0.74rem',
+                                  marginTop: '0.28rem',
+                                  opacity: 0.78,
+                                  color:
+                                    newPassword.length > 0 && newPassword.length < 15
+                                      ? '#b33818'
+                                      : 'inherit'
+                                }}
+                              >
+                                {newPassword.length > 0
+                                  ? `${newPassword.length}/15+ characters`
+                                  : 'Minimum 15 characters required by security policy.'}
+                              </div>
+                            </div>
+                            <div className="form-field">
+                              <label className="up-label" htmlFor="artisan-clerk-reset-confirm-password-input">
+                                Confirm New Password *
+                              </label>
+                              <input
+                                id="artisan-clerk-reset-confirm-password-input"
+                                type="password"
+                                className="up-input"
+                                placeholder="Re-enter your new password"
+                                required
+                                minLength={15}
+                                autoComplete="new-password"
+                                value={confirmPassword}
+                                onChange={(e) => setConfirmPassword(e.target.value)}
+                              />
+                            </div>
+                            <button
+                              type="submit"
+                              className="btn-orange"
+                              style={{ width: '100%', justifyContent: 'center', marginTop: '0.25rem' }}
+                              disabled={emailBusy}
+                            >
+                              <IconCheck size={15} />
+                              {emailBusy ? 'Updating password…' : 'Reset Password & Sign In'}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn-orange-outline"
+                              style={{ width: '100%', justifyContent: 'center', marginTop: '0.5rem' }}
+                              onClick={() => {
+                                setForgotStep('request');
+                                setCode('');
+                                setErrMsg('');
+                              }}
+                            >
+                              Resend code or change email
+                            </button>
+                          </form>
+                        )
+                      ) : authMode === 'signin' && signInMethod === 'password' ? (
                         <form onSubmit={handlePasswordSignIn}>
                           <div className="form-field">
                             <label className="up-label" htmlFor="artisan-clerk-email-input">
@@ -706,9 +913,32 @@ export default function AuthPage() {
                             />
                           </div>
                           <div className="form-field">
-                            <label className="up-label" htmlFor="artisan-clerk-password-input">
-                              Password *
-                            </label>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
+                              <label className="up-label" htmlFor="artisan-clerk-password-input" style={{ marginBottom: 0 }}>
+                                Password *
+                              </label>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSignInMethod('forgot');
+                                  setForgotStep('request');
+                                  setCode('');
+                                  setErrMsg('');
+                                }}
+                                style={{
+                                  border: 'none',
+                                  background: 'transparent',
+                                  color: '#c75b39',
+                                  fontSize: '0.78rem',
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                  padding: 0,
+                                  textDecoration: 'underline'
+                                }}
+                              >
+                                Forgot password?
+                              </button>
+                            </div>
                             <input
                               id="artisan-clerk-password-input"
                               type="password"

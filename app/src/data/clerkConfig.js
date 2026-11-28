@@ -148,6 +148,8 @@ export const DEFAULT_CLERK_BRIDGE = {
   sendEmailCode: null,
   verifyEmailCode: null,
   signInWithPassword: null,
+  sendPasswordResetCode: null,
+  completePasswordReset: null,
   signOutClerk: null,
   sendDeleteVerificationCode: null,
   deleteMyAccount: null,
