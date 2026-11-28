@@ -12,9 +12,11 @@ from __future__ import annotations
 
 import hashlib
 import re
+import urllib.parse
 import uuid
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
+from fastapi.responses import RedirectResponse
 import httpx  # noqa: F401 (shared httpx module patched by tests)
 from sqlalchemy import inspect as sa_inspect, select
 from sqlalchemy.orm import Session
@@ -38,6 +40,7 @@ from app.models.core_models import (
     AdminRole,
     AdminRolePermission,
     AdminUserRole,
+    DigiLockerVerification,
     PlatformRole,
     ProductReview,
     RetailOrder,
@@ -54,6 +57,12 @@ from app.models.core_models import (
 )
 from app.models.guardrail_models import FileSecurityScan
 from app.modules.auth.deletion import execute_user_deletion, get_active_role_codes
+from app.modules.auth.digilocker import (
+    complete_live_digilocker_callback,
+    complete_sandbox_digilocker,
+    get_digilocker_status,
+    start_digilocker_auth,
+)
 from app.modules.auth.role_views import derive_account_role
 from app.modules.guardrails.rules.input_validation import validate_safe_text
 from app.modules.guardrails.schemas import GuardrailOutcome
@@ -70,6 +79,11 @@ from app.modules.auth.schemas import (
     ConsentItemResponse,
     DeleteAccountRequest,
     DeleteAccountResponse,
+    DigiLockerSandboxCompleteRequest,
+    DigiLockerStartRequest,
+    DigiLockerStartResponse,
+    DigiLockerStatusResponse,
+    DigiLockerVerificationResponse,
     SellerProfileBrief,
     UserAddressCreateRequest,
     UserAddressResponse,
@@ -182,6 +196,13 @@ def _build_seller_brief(db: Session, seller: SellerProfile | None) -> SellerProf
         latest_application_number=latest_app.application_number if latest_app else None,
         latest_application_status=latest_app.application_status if latest_app else None,
         artisan_card_scan_id=meta.get("artisan_card_scan_id"),
+        digilocker_verification_id=meta.get("digilocker_verification_id"),
+        digilocker_mode=meta.get("digilocker_mode"),
+        digilocker_issuer_name=meta.get("digilocker_issuer_name"),
+        digilocker_card_number=meta.get("digilocker_card_number"),
+        digilocker_holder_name=meta.get("digilocker_holder_name"),
+        digilocker_doc_uri=meta.get("digilocker_doc_uri"),
+        digilocker_fetched_at=meta.get("digilocker_fetched_at"),
         review_decision_notes=latest_app.review_decision_notes if latest_app else None,
     )
 
@@ -1007,6 +1028,153 @@ def delete_my_account_rest(
     )
 
 
+# ---------------------------------------------------------------------------
+# DigiLocker OAuth 2.0 + PKCE (with Non-Prod Sandbox) Artisan Card Fetch
+# ---------------------------------------------------------------------------
+def _to_digilocker_response(row: DigiLockerVerification) -> DigiLockerVerificationResponse:
+    return DigiLockerVerificationResponse(
+        verification_id=row.id,
+        mode=(row.mode or "sandbox").lower(),
+        status=row.status,
+        issuer_id=row.issuer_id,
+        issuer_name=row.issuer_name,
+        doc_type=row.doc_type,
+        doc_uri=row.doc_uri,
+        artisan_card_number=row.artisan_card_number,
+        card_holder_name=row.card_holder_name,
+        craft_category=row.craft_category,
+        district=row.district,
+        issued_date=row.issued_date,
+        file_scan_id=row.file_scan_id,
+        fetched_at=row.fetched_at,
+    )
+
+
+@router.get("/digilocker/status", response_model=DigiLockerStatusResponse)
+def digilocker_status(settings: Settings = Depends(get_settings)) -> DigiLockerStatusResponse:
+    return DigiLockerStatusResponse(**get_digilocker_status(settings))
+
+
+@router.post("/digilocker/start", response_model=DigiLockerStartResponse)
+def digilocker_start(
+    payload: DigiLockerStartRequest | None = Body(default=None),
+    request: Request = None,  # type: ignore[assignment]
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+) -> DigiLockerStartResponse:
+    if "DIRECT_SELLER" not in principal.roles:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only registered Artisan accounts (DIRECT_SELLER) can authenticate via DigiLocker for Artisan Card verification.",
+        )
+    DigiLockerVerification.__table__.create(bind=db.get_bind(), checkfirst=True)
+    req_base = str(request.base_url).rstrip("/") if request is not None else settings.frontend_base_url
+    corr_id = getattr(request.state, "correlation_id", "") if request is not None else ""
+    res = start_digilocker_auth(
+        db,
+        principal=principal,
+        settings=settings,
+        request_base_url=req_base,
+        return_to=payload.return_to if payload else "/auth?tab=verify",
+        correlation_id=corr_id or str(uuid.uuid4()),
+    )
+    return DigiLockerStartResponse(**res)
+
+
+@router.get("/digilocker/callback")
+def digilocker_oauth_callback(
+    request: Request,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+):
+    DigiLockerVerification.__table__.create(bind=db.get_bind(), checkfirst=True)
+    req_host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or "").split(",")[0].strip()
+    fb = settings.frontend_base_url.rstrip("/")
+    fb_host = urllib.parse.urlparse(fb).netloc
+    use_relative = not fb or (req_host and req_host != "127.0.0.1:8000" and fb_host == "localhost:5173") or (req_host == fb_host)
+    prefix = "" if use_relative else fb
+    default_dest = f"{prefix}/auth?tab=verify"
+
+    if error:
+        msg = urllib.parse.quote((error_description or error)[:180])
+        return RedirectResponse(url=f"{default_dest}&digilocker_error={msg}", status_code=302)
+
+    if not code or not state:
+        return RedirectResponse(
+            url=f"{default_dest}&digilocker_error=Missing+DigiLocker+authorization+code+or+state.",
+            status_code=302,
+        )
+
+    req_base = str(request.base_url).rstrip("/")
+    corr_id = getattr(request.state, "correlation_id", "") or str(uuid.uuid4())
+    try:
+        row = complete_live_digilocker_callback(
+            db,
+            code=code,
+            state=state,
+            settings=settings,
+            request_base_url=req_base,
+            correlation_id=corr_id,
+        )
+        ret_path = row.return_to or "/auth?tab=verify"
+        sep = "&" if "?" in ret_path else "?"
+        target = f"{prefix}{ret_path}{sep}digilocker_id={urllib.parse.quote(row.id)}&digilocker_status=fetched"
+        return RedirectResponse(url=target, status_code=302)
+    except HTTPException as exc:
+        err_q = urllib.parse.quote(str(exc.detail)[:180])
+        return RedirectResponse(url=f"{default_dest}&digilocker_error={err_q}", status_code=302)
+
+
+@router.post("/digilocker/sandbox-complete", response_model=DigiLockerVerificationResponse)
+def digilocker_sandbox_complete(
+    payload: DigiLockerSandboxCompleteRequest,
+    request: Request,
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
+    settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db),
+) -> DigiLockerVerificationResponse:
+    if "DIRECT_SELLER" not in principal.roles:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only Artisan accounts (DIRECT_SELLER) can fetch an Artisan Card via DigiLocker.",
+        )
+    DigiLockerVerification.__table__.create(bind=db.get_bind(), checkfirst=True)
+    corr_id = getattr(request.state, "correlation_id", "") or str(uuid.uuid4())
+    row = complete_sandbox_digilocker(
+        db,
+        principal=principal,
+        verification_id=payload.verification_id,
+        issuer_id=payload.issuer_id,
+        artisan_card_number=payload.artisan_card_number,
+        card_holder_name=payload.card_holder_name,
+        craft_category=payload.craft_category,
+        district=payload.district,
+        settings=settings,
+        correlation_id=corr_id,
+    )
+    return _to_digilocker_response(row)
+
+
+@router.get("/digilocker/session/{verification_id}", response_model=DigiLockerVerificationResponse)
+def digilocker_get_session(
+    verification_id: str,
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> DigiLockerVerificationResponse:
+    DigiLockerVerification.__table__.create(bind=db.get_bind(), checkfirst=True)
+    row = db.scalar(
+        select(DigiLockerVerification).where(DigiLockerVerification.id == verification_id.strip())
+    )
+    if row is None or row.user_id != principal.user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="DigiLocker verification session not found.")
+    return _to_digilocker_response(row)
+
+
 @router.post(
     "/artisan-verification",
     response_model=ArtisanVerificationSubmitResponse,
@@ -1018,15 +1186,16 @@ def submit_artisan_verification(
     principal: AuthenticatedPrincipal = Depends(get_current_principal),
     db: Session = Depends(get_db),
 ) -> ArtisanVerificationSubmitResponse:
-    """Persist an authenticated artisan's GI or Standard verification application.
+    """Persist an authenticated artisan's DigiLocker-backed verification application.
 
-    - Standard (`NON_GI` / `STANDARD`) applications require an uploaded Artisan Card
-      image/PDF (`artisan_card_scan_id` from `/api/v1/guardrails/documents/upload`) so
-      administrators can inspect the physical card in `/admin`.
+    - Mandatory for ALL registering artisans (both GI Certified and Standard tracks):
+      must supply `digilocker_verification_id` from a completed DigiLocker fetch
+      (`status in {'FETCHED', 'CONSUMED'}`) carrying a verified Artisan Card document
+      (`file_scan_id`) so administrators can inspect the official card in `/admin`.
+    - Manual file upload bypass (`artisan_card_scan_id` alone without DigiLocker) is rejected.
     - Applications stay staged in `seller_verification_applications` (`SUBMITTED`) with
       `SellerProfile.profile_status='DRAFT'` and `verification_status='SUBMITTED'`
-      (excluded from public `/api/v1/artisans`) until an Admin approves them in `/admin`,
-      which promotes the record straight into the live verified artisans table.
+      until an Admin approves them in `/admin`.
     """
     user = db.scalar(select(User).where(User.id == principal.user_id))
     if user is None:
@@ -1039,7 +1208,7 @@ def submit_artisan_verification(
 
     normalized_path = "GI" if payload.verification_path == "GI" else "NON_GI"
     claimed_gi = (payload.claimed_gi_code or "").strip() or None
-    card_scan_id = (payload.artisan_card_scan_id or "").strip() or None
+    dl_ver_id = (payload.digilocker_verification_id or "").strip() or None
 
     ver_issues = [
         *validate_safe_text("store_name", payload.store_name, required=True, min_len=2, max_len=160),
@@ -1061,26 +1230,42 @@ def submit_artisan_verification(
             detail="GI Certified track requires a GI Registration / Authorized User number.",
         )
 
-    scan_row: FileSecurityScan | None = None
-    if card_scan_id:
-        scan_row = db.scalar(
-            select(FileSecurityScan).where(FileSecurityScan.id == card_scan_id)
-        )
-        if scan_row is None or scan_row.uploader_user_id != user.id:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail="Uploaded Artisan Card document was not found for your account. Please upload it again.",
-            )
-        if scan_row.scan_status == "INFECTED":
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail="Uploaded Artisan Card failed security scanning.",
-            )
-    elif normalized_path == "NON_GI":
+    DigiLockerVerification.__table__.create(bind=db.get_bind(), checkfirst=True)
+    if not dl_ver_id:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Standard Artisan registration requires uploading your Artisan Card image for Admin verification.",
+            detail="DigiLocker Artisan Card authentication is mandatory before submitting artisan verification.",
         )
+
+    dl_row = db.scalar(
+        select(DigiLockerVerification).where(DigiLockerVerification.id == dl_ver_id)
+    )
+    if dl_row is None or dl_row.user_id != user.id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="DigiLocker verification session was not found for your account. Please authenticate with DigiLocker again.",
+        )
+    if dl_row.status not in {"FETCHED", "CONSUMED"} or not dl_row.file_scan_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="DigiLocker Artisan Card has not been fetched yet. Complete DigiLocker authentication first.",
+        )
+
+    scan_row = db.scalar(
+        select(FileSecurityScan).where(FileSecurityScan.id == dl_row.file_scan_id)
+    )
+    if scan_row is None or scan_row.uploader_user_id != user.id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Fetched DigiLocker Artisan Card document was not found. Please authenticate via DigiLocker again.",
+        )
+    if scan_row.scan_status == "INFECTED":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Fetched DigiLocker Artisan Card failed security scanning.",
+        )
+
+    dl_row.status = "CONSUMED"
 
     user.account_role = "ARTISAN"
     if payload.phone and payload.phone.strip():
@@ -1117,6 +1302,7 @@ def submit_artisan_verification(
             seller.profile_status = "DRAFT"
 
     app_number = f"HL-VER-{utcnow().strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
+    fetched_iso = dl_row.fetched_at.isoformat() if dl_row.fetched_at else utcnow().isoformat()
     application = SellerVerificationApplication(
         id=new_uuid(),
         seller_profile_id=seller.id,
@@ -1128,40 +1314,51 @@ def submit_artisan_verification(
         submitted_metadata={
             "craft_specialty": payload.craft_specialty.strip(),
             "skill_description": (payload.skill_description or "").strip()[:1000],
-            "artisan_card_scan_id": scan_row.id if scan_row else None,
-            "artisan_card_filename": scan_row.original_filename if scan_row else None,
-            "artisan_card_mime": scan_row.detected_mime_type if scan_row else None,
+            "verification_source": "DIGILOCKER",
+            "artisan_card_scan_id": scan_row.id,
+            "artisan_card_filename": scan_row.original_filename,
+            "artisan_card_mime": scan_row.detected_mime_type,
+            "digilocker_verification_id": dl_row.id,
+            "digilocker_mode": (dl_row.mode or "sandbox").lower(),
+            "digilocker_issuer_id": dl_row.issuer_id,
+            "digilocker_issuer_name": dl_row.issuer_name,
+            "digilocker_doc_type": dl_row.doc_type,
+            "digilocker_doc_uri": dl_row.doc_uri,
+            "digilocker_card_number": dl_row.artisan_card_number,
+            "digilocker_holder_name": dl_row.card_holder_name,
+            "digilocker_craft_category": dl_row.craft_category,
+            "digilocker_district": dl_row.district,
+            "digilocker_issued_date": dl_row.issued_date,
+            "digilocker_fetched_at": fetched_iso,
             "phone": (payload.phone or user.phone or "").strip(),
         },
     )
     db.add(application)
     db.flush()
 
-    if scan_row is not None:
-        existing_doc = db.scalar(
-            select(SellerDocument).where(SellerDocument.storage_key == scan_row.storage_key)
-        )
-        if existing_doc is None:
-            doc_type = "GI_AUTHORIZED_USER_CERT" if normalized_path == "GI" else "IDENTITY_PROOF"
-            db.add(
-                SellerDocument(
-                    id=new_uuid(),
-                    seller_profile_id=seller.id,
-                    application_id=application.id,
-                    document_type=doc_type,
-                    storage_key=scan_row.storage_key,
-                    original_filename=scan_row.original_filename,
-                    detected_mime_type=scan_row.detected_mime_type,
-                    file_size_bytes=scan_row.file_size_bytes,
-                    sha256_hash=scan_row.sha256_hash,
-                    scan_status=scan_row.scan_status if scan_row.scan_status in {"PENDING_SCAN", "CLEAN", "INFECTED", "SCAN_ERROR"} else "CLEAN",
-                    verification_status="PENDING",
-                    uploaded_by_user_id=user.id,
-                )
+    existing_doc = db.scalar(
+        select(SellerDocument).where(SellerDocument.storage_key == scan_row.storage_key)
+    )
+    if existing_doc is None:
+        db.add(
+            SellerDocument(
+                id=new_uuid(),
+                seller_profile_id=seller.id,
+                application_id=application.id,
+                document_type="IDENTITY_PROOF",
+                storage_key=scan_row.storage_key,
+                original_filename=scan_row.original_filename,
+                detected_mime_type=scan_row.detected_mime_type,
+                file_size_bytes=scan_row.file_size_bytes,
+                sha256_hash=scan_row.sha256_hash,
+                scan_status=scan_row.scan_status if scan_row.scan_status in {"PENDING_SCAN", "CLEAN", "INFECTED", "SCAN_ERROR"} else "CLEAN",
+                verification_status="PENDING",
+                uploaded_by_user_id=user.id,
             )
-        else:
-            existing_doc.application_id = application.id
-            existing_doc.verification_status = "PENDING"
+        )
+    else:
+        existing_doc.application_id = application.id
+        existing_doc.verification_status = "PENDING"
 
     record_audit_log(
         db,
@@ -1175,7 +1372,11 @@ def submit_artisan_verification(
             "application_number": app_number,
             "verification_path": normalized_path,
             "workshop_district": payload.workshop_district.strip(),
-            "artisan_card_scan_id": scan_row.id if scan_row else None,
+            "verification_source": "DIGILOCKER",
+            "digilocker_verification_id": dl_row.id,
+            "digilocker_mode": dl_row.mode,
+            "digilocker_card_number": dl_row.artisan_card_number,
+            "artisan_card_scan_id": scan_row.id,
         },
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),

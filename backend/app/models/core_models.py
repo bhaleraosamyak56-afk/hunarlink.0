@@ -907,3 +907,32 @@ class UserConsent(Base):
     withdrawn_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class DigiLockerVerification(Base):
+    """Tracks OAuth 2.0 + PKCE (or Sandbox) DigiLocker Artisan Card authentication & fetch."""
+
+    __tablename__ = "digilocker_verifications"
+
+    id: Mapped[str] = mapped_column(UUIDChar(), primary_key=True, default=new_uuid)
+    user_id: Mapped[str] = mapped_column(UUIDChar(), ForeignKey("users.id"), nullable=False, index=True)
+    state_token: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    pkce_verifier: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    mode: Mapped[str] = mapped_column(String(16), default="SANDBOX", nullable=False)  # LIVE | SANDBOX
+    status: Mapped[str] = mapped_column(String(24), default="INITIATED", nullable=False)  # INITIATED | FETCHED | CONSUMED | EXPIRED | FAILED
+    issuer_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    issuer_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    doc_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    doc_uri: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    artisan_card_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    card_holder_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    craft_category: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    district: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    issued_date: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    file_scan_id: Mapped[str | None] = mapped_column(UUIDChar(), nullable=True)
+    raw_claims_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    return_to: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    fetched_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, onupdate=utcnow, nullable=False)

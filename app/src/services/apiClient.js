@@ -269,6 +269,32 @@ export function submitArtisanVerification(payload, token) {
   });
 }
 
+export function fetchDigiLockerStatus() {
+  return apiRequest('/api/v1/auth/digilocker/status');
+}
+
+export function startDigiLockerAuth(payload, token) {
+  return apiRequest('/api/v1/auth/digilocker/start', {
+    method: 'POST',
+    body: payload || { return_to: '/auth?tab=verify' },
+    token
+  });
+}
+
+export function completeDigiLockerSandbox(payload, token) {
+  return apiRequest('/api/v1/auth/digilocker/sandbox-complete', {
+    method: 'POST',
+    body: payload,
+    token
+  });
+}
+
+export function fetchDigiLockerSession(verificationId, token) {
+  return apiRequest(`/api/v1/auth/digilocker/session/${encodeURIComponent(verificationId)}`, {
+    token
+  });
+}
+
 export function fetchMyAddresses(token) {
   return apiRequest('/api/v1/auth/addresses', { token });
 }

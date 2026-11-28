@@ -73,6 +73,25 @@ class Settings(BaseSettings):
     # GI reference dataset version for deterministic verification
     gi_reference_dataset_version: str = Field(default="unconfigured")
 
+    # DigiLocker Artisan Card OAuth 2.0 + PKCE verification
+    digilocker_mode: str = Field(default="sandbox")  # sandbox | live
+    digilocker_client_id: str = Field(default="")
+    digilocker_client_secret: SecretStr = Field(default=SecretStr(""))
+    digilocker_redirect_uri: str = Field(default="")
+    digilocker_auth_base_url: str = Field(default="https://digilocker.meripehchaan.gov.in")
+    digilocker_issuer_ids: str = Field(default="in.gov.handicrafts,in.gov.jk.handicrafts")
+
+    @property
+    def digilocker_live_configured(self) -> bool:
+        return bool(
+            self.digilocker_client_id.strip()
+            and self.digilocker_client_secret.get_secret_value().strip()
+        )
+
+    @property
+    def digilocker_issuer_list(self) -> List[str]:
+        return [i.strip() for i in self.digilocker_issuer_ids.split(",") if i.strip()]
+
     @property
     def cors_origins_list(self) -> List[str]:
         return [o.strip() for o in self.cors_allowed_origins.split(",") if o.strip()]
