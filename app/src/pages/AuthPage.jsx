@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useStore } from '../state/StoreContext.jsx';
 import {
@@ -161,8 +161,13 @@ export default function AuthPage() {
     };
   }, [cardPreviewUrl]);
 
-  const refreshLiveApplicationStatus = useCallback(async () => {
+  const autoCheckedUserIdRef = useRef('');
+  const checkingDbRef = useRef(false);
+
+  const refreshLiveApplicationStatus = useCallback(async (forceRefresh = false) => {
     if (!signedIn || !clerkUser) return;
+    if (checkingDbRef.current && !forceRefresh) return;
+    checkingDbRef.current = true;
     setCheckingDbStatus(true);
     try {
       if (canAttemptBackend() && clerk.getToken) {
@@ -202,27 +207,41 @@ export default function AuthPage() {
             reviewDecisionNotes: sp.review_decision_notes || null
           };
           saveClerkArtisanProfile(clerkUser.id, profileToSave);
-          setUser(
-            {
-              id: clerkUser.id,
-              clerkUserId: clerkUser.id,
-              name: me?.display_name || clerkName || sp.store_name,
-              fullName: me?.display_name || clerkName || sp.store_name,
-              email: me?.email || clerkEmail,
-              phone: me.phone || '',
-              role: 'artisan',
-              isLoggedIn: true,
-              authProvider: 'clerk',
-              sellerProfile: sp,
-              ...profileToSave
-            },
-            { silent: true }
-          );
+
+          const needsUserUpdate =
+            !storeUser ||
+            Boolean(storeUser.artisanVerified) !== isApproved ||
+            storeUser.verificationStatus !== sp.verification_status ||
+            storeUser.profileStatus !== sp.profile_status ||
+            storeUser.sellerProfileId !== sp.seller_profile_id ||
+            storeUser.applicationNumber !== (sp.latest_application_number || null) ||
+            storeUser.business !== (sp.store_name || '');
+
+          if (needsUserUpdate) {
+            setUser(
+              {
+                id: clerkUser.id,
+                clerkUserId: clerkUser.id,
+                name: me?.display_name || clerkName || sp.store_name,
+                fullName: me?.display_name || clerkName || sp.store_name,
+                email: me?.email || clerkEmail,
+                phone: me.phone || '',
+                role: 'artisan',
+                isLoggedIn: true,
+                authProvider: 'clerk',
+                sellerProfile: sp,
+                ...profileToSave
+              },
+              { silent: true }
+            );
+          }
 
           if (isApproved && params.get('edit') !== '1') {
             toast('Your Artisan Workshop has been verified by Admin! Entering Seller Studio.', 'success');
             await hydrateFromBackend(token);
             navigate('/seller', { replace: true });
+          } else if (forceRefresh && !isApproved) {
+            toast(`Status: ${sp.verification_status} — still awaiting Admin review in /admin.`, 'default');
           }
         }
       } else {
@@ -234,14 +253,19 @@ export default function AuthPage() {
     } catch {
       /* User may not be synced yet; Step 2 submission will sync them first */
     } finally {
+      checkingDbRef.current = false;
       setCheckingDbStatus(false);
     }
-  }, [signedIn, clerkUser, clerk, clerkName, clerkEmail, params, navigate, setUser, toast, hydrateFromBackend]);
+  }, [signedIn, clerkUser, clerk, storeUser, clerkName, clerkEmail, params, navigate, setUser, toast, hydrateFromBackend]);
 
   useEffect(() => {
-    if (signedIn && clerkUser) {
-      refreshLiveApplicationStatus();
+    if (!signedIn || !clerkUser?.id) {
+      autoCheckedUserIdRef.current = '';
+      return;
     }
+    if (autoCheckedUserIdRef.current === clerkUser.id) return;
+    autoCheckedUserIdRef.current = clerkUser.id;
+    refreshLiveApplicationStatus();
   }, [signedIn, clerkUser?.id, refreshLiveApplicationStatus]);
 
   function handleCardFileChange(e) {
@@ -1228,7 +1252,7 @@ export default function AuthPage() {
                     className="btn-orange"
                     style={{ flex: 1, justifyContent: 'center' }}
                     disabled={checkingDbStatus}
-                    onClick={refreshLiveApplicationStatus}
+                    onClick={() => refreshLiveApplicationStatus(true)}
                   >
                     {checkingDbStatus ? 'Checking Database…' : 'Check Approval Status'}
                   </button>

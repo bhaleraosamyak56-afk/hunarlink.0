@@ -600,6 +600,17 @@ export function StoreProvider({ children }) {
     saveStorage(KEYS.platformUsers, []);
   }, []);
 
+  const setBuyerProfile = useCallback((profile) => {
+    dispatch({ type: 'buyerProfile/set', profile });
+  }, []);
+
+  const setUser = useCallback((user, opts = {}) => {
+    dispatch({ type: 'user/set', user });
+    if (!opts.silent) {
+      toast(user ? `Signed in as ${user.name || user.email}` : 'Signed out');
+    }
+  }, [toast]);
+
   useEffect(() => {
     if (!mounted.current) {
       mounted.current = true;
@@ -777,7 +788,7 @@ export function StoreProvider({ children }) {
         dispatch({ type: 'inquiries/add', inquiry });
       },
       replyToInquiry: (id, reply) => dispatch({ type: 'inquiries/reply', id, reply }),
-      setBuyerProfile: (profile) => dispatch({ type: 'buyerProfile/set', profile }),
+      setBuyerProfile,
       setPlatformUsers: () => dispatch({ type: 'platformUsers/set', users: [] }),
       setAdminToken: (token) => dispatch({ type: 'adminToken/set', token }),
 
@@ -833,12 +844,7 @@ export function StoreProvider({ children }) {
       resetFilters: () => dispatch({ type: 'ui/filtersReset' }),
       setLoadingProducts: (value) => dispatch({ type: 'ui/loading', value }),
 
-      setUser: (user, opts = {}) => {
-        dispatch({ type: 'user/set', user });
-        if (!opts.silent) {
-          toast(user ? `Signed in as ${user.name || user.email}` : 'Signed out');
-        }
-      },
+      setUser,
       pushRecent: (id) => dispatch({ type: 'recentlyViewed/push', id }),
       clearRecentlyViewed: () => dispatch({ type: 'recentlyViewed/clear' }),
 
@@ -870,7 +876,7 @@ export function StoreProvider({ children }) {
         return list;
       })()
     };
-  }, [state, catalogue, totals, toast, hydrateFromBackend, loadPublicCatalog, clearSessionState]);
+  }, [state, catalogue, totals, toast, hydrateFromBackend, loadPublicCatalog, clearSessionState, setBuyerProfile, setUser]);
 
   return <StoreCtx.Provider value={value}>{children}</StoreCtx.Provider>;
 }

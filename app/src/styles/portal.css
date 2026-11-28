@@ -936,9 +936,9 @@ h1, h2, h3, h4 {
 /* Toast */
 .up-toast {
   position: fixed;
-  bottom: 22px;
-  right: 22px;
-  max-width: min(400px, calc(100vw - 32px));
+  top: 20px;
+  left: 50%;
+  max-width: min(520px, calc(100vw - 32px));
   background: var(--forest-950);
   color: #FFFFFF;
   border: 1px solid rgba(255, 180, 107, 0.45);
@@ -947,16 +947,16 @@ h1, h2, h3, h4 {
   font-size: 0.83rem;
   font-weight: 600;
   box-shadow: var(--shadow-lg);
-  z-index: 999;
+  z-index: 1200;
   opacity: 0;
-  transform: translateY(18px);
+  transform: translateX(-50%) translateY(-18px);
   pointer-events: none;
   transition: all 0.25s ease;
 }
 
 .up-toast.show {
   opacity: 1;
-  transform: translateY(0);
+  transform: translateX(-50%) translateY(0);
 }
 
 /* ==========================================================================
@@ -2028,9 +2028,10 @@ button {
 /* Toast */
 .wp-toast {
   position: fixed;
-  bottom: 22px;
-  right: 22px;
-  z-index: 999;
+  top: 20px;
+  left: 50%;
+  max-width: min(520px, calc(100vw - 32px));
+  z-index: 1200;
   background: var(--forest-950);
   color: #FFFFFF;
   padding: 12px 18px;
@@ -2040,14 +2041,14 @@ button {
   font-weight: 600;
   box-shadow: var(--shadow-lg);
   opacity: 0;
-  transform: translateY(12px);
+  transform: translateX(-50%) translateY(-18px);
   pointer-events: none;
   transition: all 0.22s ease;
 }
 
 .wp-toast.show {
   opacity: 1;
-  transform: translateY(0);
+  transform: translateX(-50%) translateY(0);
 }
 
 /* ==========================================================================
@@ -4452,9 +4453,9 @@ button, input, select, textarea {
 /* Toast Notification */
 .portal-toast {
   position: fixed;
-  bottom: 22px;
-  right: 22px;
-  max-width: min(420px, calc(100vw - 32px));
+  top: 20px;
+  left: 50%;
+  max-width: min(520px, calc(100vw - 32px));
   background: var(--forest-950);
   color: #FFFFFF;
   border: 1px solid rgba(212, 160, 61, 0.45);
@@ -4463,16 +4464,16 @@ button, input, select, textarea {
   font-size: 0.84rem;
   font-weight: 600;
   box-shadow: var(--shadow-lg);
-  z-index: 999;
+  z-index: 1200;
   opacity: 0;
-  transform: translateY(20px);
+  transform: translateX(-50%) translateY(-20px);
   pointer-events: none;
   transition: all 0.28s ease;
 }
 
 .portal-toast.show {
   opacity: 1;
-  transform: translateY(0);
+  transform: translateX(-50%) translateY(0);
 }
 
 /* ==========================================================================
