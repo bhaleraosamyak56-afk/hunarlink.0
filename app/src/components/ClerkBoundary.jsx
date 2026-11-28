@@ -10,9 +10,13 @@ import {
 import { useSignIn, useSignUp } from '@clerk/react/legacy';
 import { useStore } from '../state/StoreContext.jsx';
 import {
+  SESSION_EVENTS_CHANNEL,
+  SESSION_REVOKED_STORAGE_KEY,
   canAttemptBackend,
   checkAuthAccount,
   deleteMyAccount as deleteMyAccountApi,
+  fetchMyAuthProfile,
+  setAuthRevokedHandler,
   syncAuthenticatedUser
 } from '../services/apiClient.js';
 import {
@@ -278,18 +282,137 @@ function ClerkBridgeInner({ children }) {
     buyerProfile,
     setBuyerProfile,
     hydrateFromBackend,
-    clearSessionState
+    clearSessionState,
+    toast
   } = useStore();
 
   const isLoaded = Boolean(userLoaded && authLoaded);
   const lastDbSyncKeyRef = useRef('');
   const syncedAccountIdsRef = useRef(new Set());
   const conflictSigningOutRef = useRef(false);
+  const liveCheckInFlightRef = useRef(false);
+  const lastLiveCheckAtRef = useRef(0);
+  const resolvedRoleRef = useRef('buyer');
 
   const getCurrentAppPath = () => {
     const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
     return (window.location.pathname || '/').replace(new RegExp(`^${base}`), '') || '/';
   };
+
+  const forceRevokedSignOut = useCallback(
+    async ({ requestedRole = 'buyer', queryFlag = 'account_deleted=1', redirect = false, notice = '' } = {}) => {
+      if (conflictSigningOutRef.current) return;
+      conflictSigningOutRef.current = true;
+      clearPendingClerkRole();
+      clearPendingClerkAuthMode();
+      lastDbSyncKeyRef.current = '';
+      syncedAccountIdsRef.current.clear();
+      clearSessionState();
+      setUser(null, { silent: true });
+      try {
+        if (clerk?.signOut) {
+          await clerk.signOut(() => {});
+        }
+      } catch {
+        /* Clerk user/session may already be deleted server-side */
+      }
+      conflictSigningOutRef.current = false;
+
+      if (notice && typeof toast === 'function') {
+        toast(notice, 'info');
+      }
+
+      const currentPath = getCurrentAppPath();
+      const onProtectedOrAuth = /^\/(profile|orders|seller|wholesale|auth|login|register)(\.html)?$/.test(
+        currentPath
+      );
+      if (redirect || onProtectedOrAuth) {
+        const registerDest =
+          requestedRole === 'artisan'
+            ? `/auth?mode=register&${queryFlag}`
+            : `/register?${queryFlag}`;
+        navigate(registerDest, { replace: true });
+      }
+    },
+    [clerk, clearSessionState, navigate, setUser, toast]
+  );
+
+  const verifyLiveDbSession = useCallback(
+    async ({ force = false, requestedRole = resolvedRoleRef.current } = {}) => {
+      if (
+        !canAttemptBackend() ||
+        !isSignedIn ||
+        !clerkUser?.id ||
+        !clerkGetToken ||
+        conflictSigningOutRef.current ||
+        liveCheckInFlightRef.current
+      ) {
+        return;
+      }
+      const now = Date.now();
+      if (!force && now - lastLiveCheckAtRef.current < 1500) {
+        return;
+      }
+      liveCheckInFlightRef.current = true;
+      lastLiveCheckAtRef.current = now;
+      try {
+        let token = null;
+        try {
+          token = await clerkGetToken({ skipCache: true });
+        } catch (tokErr) {
+          const clerkCode = tokErr?.errors?.[0]?.code || '';
+          if (
+            tokErr?.status === 401 ||
+            tokErr?.status === 404 ||
+            /session_not_found|resource_not_found|user_not_found|unauthenticated/i.test(clerkCode)
+          ) {
+            await forceRevokedSignOut({
+              requestedRole,
+              queryFlag: 'account_deleted=1',
+              redirect: false,
+              notice: 'Your HunarLink account session is no longer active.'
+            });
+            return;
+          }
+          token = await clerkGetToken().catch(() => null);
+        }
+
+        if (!token) {
+          await forceRevokedSignOut({
+            requestedRole,
+            queryFlag: 'account_deleted=1',
+            redirect: false,
+            notice: 'Your HunarLink account session is no longer active.'
+          });
+          return;
+        }
+
+        const profile = await fetchMyAuthProfile(token);
+        if (profile && profile.account_status && profile.account_status !== 'ACTIVE') {
+          await forceRevokedSignOut({
+            requestedRole,
+            queryFlag: 'account_deleted=1',
+            redirect: false,
+            notice: 'Your HunarLink account has been deactivated.'
+          });
+        }
+      } catch (err) {
+        const isDeactivatedError =
+          err?.status === 403 && /not active|DEACTIVATED|SUSPENDED/i.test(err?.message || '');
+        if (err?.status === 401 || err?.status === 404 || isDeactivatedError) {
+          await forceRevokedSignOut({
+            requestedRole,
+            queryFlag: 'account_deleted=1',
+            redirect: false,
+            notice: 'Your HunarLink account has been removed or deactivated.'
+          });
+        }
+      } finally {
+        liveCheckInFlightRef.current = false;
+      }
+    },
+    [clerkGetToken, clerkUser?.id, forceRevokedSignOut, isSignedIn]
+  );
 
   /* Sync the Clerk-authenticated user into HunarLink's FastAPI database
      (`users` + `user_role_assignments`) using a cryptographically verified
@@ -302,13 +425,45 @@ function ClerkBridgeInner({ children }) {
     async (clerkAccount, syncedMeta, requestedRole, authMode = 'sync') => {
       if (!canAttemptBackend() || !clerkAccount?.id || !clerkGetToken) return null;
       const syncKey = `${clerkAccount.id}:${requestedRole}:${authMode}`;
-      if (lastDbSyncKeyRef.current === syncKey) return null;
+      if (lastDbSyncKeyRef.current === syncKey) {
+        if (syncedAccountIdsRef.current.has(clerkAccount.id)) {
+          await verifyLiveDbSession({ requestedRole });
+        }
+        return null;
+      }
       const email = syncedMeta.email || '';
       if (!email) return null;
 
       try {
-        const token = await clerkGetToken();
-        if (!token) return null;
+        let token = null;
+        try {
+          token = await clerkGetToken({ skipCache: true });
+        } catch (tokErr) {
+          const clerkCode = tokErr?.errors?.[0]?.code || '';
+          if (
+            tokErr?.status === 401 ||
+            tokErr?.status === 404 ||
+            /session_not_found|resource_not_found|user_not_found|unauthenticated/i.test(clerkCode)
+          ) {
+            await forceRevokedSignOut({
+              requestedRole,
+              queryFlag: 'account_deleted=1',
+              redirect: true,
+              notice: 'Your HunarLink account session is no longer active.'
+            });
+            return null;
+          }
+          token = await clerkGetToken().catch(() => null);
+        }
+        if (!token) {
+          await forceRevokedSignOut({
+            requestedRole,
+            queryFlag: 'account_deleted=1',
+            redirect: true,
+            notice: 'Your HunarLink account session is no longer active.'
+          });
+          return null;
+        }
         const emailVerified = Boolean(
           clerkAccount.primaryEmailAddress?.verification?.status === 'verified'
         );
@@ -516,7 +671,7 @@ function ClerkBridgeInner({ children }) {
         return null;
       }
     },
-    [buyerProfile, clerk, clerkGetToken, clearSessionState, hydrateFromBackend, navigate, setBuyerProfile, setUser]
+    [buyerProfile, clerk, clerkGetToken, clearSessionState, forceRevokedSignOut, hydrateFromBackend, navigate, setBuyerProfile, setUser, verifyLiveDbSession]
   );
 
   /* Mirror the live Clerk user into StoreContext ONLY after verifying against
@@ -555,6 +710,7 @@ function ClerkBridgeInner({ children }) {
       roleMap[clerkUser.id] ||
       'buyer';
 
+    resolvedRoleRef.current = resolvedRole;
     saveUserRole(clerkUser.id, resolvedRole);
 
     const synced = buildSyncedUser(clerkUser, resolvedRole);
@@ -601,6 +757,113 @@ function ClerkBridgeInner({ children }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoaded, isSignedIn, clerkUser?.id, clerkUser?.updatedAt, location.pathname]);
+
+  /* Continuous session enforcement:
+     If an Admin deletes/deactivates this account in another tab (or via CLI / DB),
+     immediately sign the user out of this tab via:
+       1) Global API 401/403 revocation hook,
+       2) Cross-tab BroadcastChannel + localStorage revocation signal,
+       3) Window focus / tab visibility DB re-check (/api/v1/auth/me), and
+       4) Periodic 15s background verification while the tab stays visible. */
+  useEffect(() => {
+    if (!isLoaded || !isSignedIn || !clerkUser?.id || !canAttemptBackend()) {
+      setAuthRevokedHandler(null);
+      return;
+    }
+
+    const currentEmail = (
+      clerkUser.primaryEmailAddress?.emailAddress ||
+      storeUser?.email ||
+      ''
+    )
+      .trim()
+      .toLowerCase();
+    const currentDbId = storeUser?.dbUserId || null;
+
+    const handleRevocationPayload = (payload) => {
+      if (!payload || payload.type !== 'USER_DELETED') return;
+      const matchesUser =
+        (payload.userId && currentDbId && payload.userId === currentDbId) ||
+        (payload.clerkUserId && payload.clerkUserId === clerkUser.id) ||
+        (payload.email && currentEmail && payload.email === currentEmail);
+      if (matchesUser) {
+        forceRevokedSignOut({
+          requestedRole: resolvedRoleRef.current,
+          queryFlag: 'account_deleted=1',
+          redirect: false,
+          notice: 'Your HunarLink account has been removed by an administrator.'
+        });
+      } else {
+        verifyLiveDbSession({ force: true });
+      }
+    };
+
+    setAuthRevokedHandler(() => {
+      forceRevokedSignOut({
+        requestedRole: resolvedRoleRef.current,
+        queryFlag: 'account_deleted=1',
+        redirect: false,
+        notice: 'Your HunarLink account session is no longer active.'
+      });
+    });
+
+    const onFocusOrVisible = () => {
+      if (document.visibilityState === 'hidden') return;
+      verifyLiveDbSession();
+    };
+    window.addEventListener('focus', onFocusOrVisible);
+    document.addEventListener('visibilitychange', onFocusOrVisible);
+
+    const onStorage = (e) => {
+      if (e.key !== SESSION_REVOKED_STORAGE_KEY || !e.newValue) return;
+      try {
+        handleRevocationPayload(JSON.parse(e.newValue));
+      } catch {
+        verifyLiveDbSession({ force: true });
+      }
+    };
+    window.addEventListener('storage', onStorage);
+
+    let channel = null;
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        channel = new BroadcastChannel(SESSION_EVENTS_CHANNEL);
+        channel.onmessage = (evt) => handleRevocationPayload(evt?.data);
+      }
+    } catch {
+      channel = null;
+    }
+
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== 'hidden') {
+        verifyLiveDbSession();
+      }
+    }, 15000);
+
+    return () => {
+      setAuthRevokedHandler(null);
+      window.removeEventListener('focus', onFocusOrVisible);
+      document.removeEventListener('visibilitychange', onFocusOrVisible);
+      window.removeEventListener('storage', onStorage);
+      if (channel) {
+        try {
+          channel.close();
+        } catch {
+          /* ignore */
+        }
+      }
+      window.clearInterval(timer);
+    };
+  }, [
+    clerkUser?.id,
+    clerkUser?.primaryEmailAddress?.emailAddress,
+    forceRevokedSignOut,
+    isLoaded,
+    isSignedIn,
+    storeUser?.dbUserId,
+    storeUser?.email,
+    verifyLiveDbSession
+  ]);
 
   const authenticateWithOAuth = useCallback(
     async (provider, { role = 'user', mode = 'signin', redirectTo = '/' } = {}) => {

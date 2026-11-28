@@ -57,7 +57,8 @@ export default function Header({ showSectionNav = true, activeSection = 'home' }
   } = useStore();
 
   const isSignedIn = Boolean(
-    user &&
+    (!clerk.enabled || (clerk.isLoaded && clerk.isSignedIn)) &&
+      user &&
       user.isLoggedIn !== false &&
       (user.email || user.fullName || user.name || user.clerkUserId)
   );

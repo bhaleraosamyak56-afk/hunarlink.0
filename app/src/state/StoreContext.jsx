@@ -554,17 +554,44 @@ export function StoreProvider({ children }) {
     loadPublicCatalog();
   }, [loadPublicCatalog]);
 
+  const clearSessionState = useCallback(() => {
+    dispatch({ type: 'db/reset' });
+    saveStorage(KEYS.cart, []);
+    saveStorage(KEYS.wishlist, []);
+    saveStorage(KEYS.savedLater, []);
+    saveStorage(KEYS.coupon, null);
+    saveStorage(KEYS.user, null);
+    saveStorage(KEYS.buyerProfile, null);
+    saveStorage(KEYS.platformUsers, []);
+    try {
+      window.localStorage.removeItem(KEYS.user);
+      window.localStorage.removeItem(KEYS.buyerProfile);
+      window.localStorage.removeItem('hunarlink_recently_viewed');
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   /* Hydrate catalogue, verified artisans, user orders & addresses strictly
      from FastAPI + MySQL/SQLite using the authenticated Clerk RS256 JWT. */
   const hydrateFromBackend = useCallback(async (token) => {
     if (!token) return;
     dispatch({ type: 'db/loading' });
+    const allowOffline = (err) => {
+      if (
+        err?.status === 401 ||
+        (err?.status === 403 && /not active|DEACTIVATED|SUSPENDED/i.test(err?.message || ''))
+      ) {
+        throw err;
+      }
+      return [];
+    };
     try {
       const [rawProducts, rawArtisans, rawOrders, rawAddresses] = await Promise.all([
         fetchCatalogProducts(null, token).catch(() => []),
         fetchArtisans(token).catch(() => []),
-        fetchMyRetailOrders(token).catch(() => []),
-        fetchMyAddresses(token).catch(() => [])
+        fetchMyRetailOrders(token).catch(allowOffline),
+        fetchMyAddresses(token).catch(allowOffline)
       ]);
       const mappedCatalogue = Array.isArray(rawProducts)
         ? rawProducts.map(mapDbListingToProduct)
@@ -585,20 +612,16 @@ export function StoreProvider({ children }) {
         addresses: mappedAddresses
       });
     } catch (err) {
+      if (
+        err?.status === 401 ||
+        (err?.status === 403 && /not active|DEACTIVATED|SUSPENDED/i.test(err?.message || ''))
+      ) {
+        clearSessionState();
+        return;
+      }
       dispatch({ type: 'db/error', error: err?.message || 'Could not load data from database.' });
     }
-  }, []);
-
-  const clearSessionState = useCallback(() => {
-    dispatch({ type: 'db/reset' });
-    saveStorage(KEYS.cart, []);
-    saveStorage(KEYS.wishlist, []);
-    saveStorage(KEYS.savedLater, []);
-    saveStorage(KEYS.coupon, null);
-    saveStorage(KEYS.user, null);
-    saveStorage(KEYS.buyerProfile, null);
-    saveStorage(KEYS.platformUsers, []);
-  }, []);
+  }, [clearSessionState]);
 
   const setBuyerProfile = useCallback((profile) => {
     dispatch({ type: 'buyerProfile/set', profile });

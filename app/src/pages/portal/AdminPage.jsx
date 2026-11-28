@@ -18,7 +18,8 @@ import {
   fetchMyAuthProfile,
   initiateAdminRefund,
   moderateAdminListing,
-  verifyAdminSeller
+  verifyAdminSeller,
+  broadcastSessionRevocation
 } from '../../services/apiClient.js';
 import { generateIdempotencyKey } from '../../services/razorpayCheckout.js';
 import AdminLoginPage from './AdminLoginPage.jsx';
@@ -274,6 +275,11 @@ export default function AdminPage() {
         },
         adminToken
       );
+      broadcastSessionRevocation({
+        userId: deleteConfirmUser.user_id,
+        clerkUserId: deleteConfirmUser.clerk_user_id,
+        email: deleteConfirmUser.email
+      });
       toast(
         res?.message ||
           `Deleted ${deleteConfirmUser.email} from HunarLink DB${res?.clerk_deleted ? ' & Clerk' : ''}.`,

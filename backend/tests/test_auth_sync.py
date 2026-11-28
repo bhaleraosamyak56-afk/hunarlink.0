@@ -1580,3 +1580,100 @@ def test_17_users_table_account_role_and_backfill(
     set_authenticated_principal(app, None)
 
 
+def test_24_admin_deleted_user_immediately_rejected_by_me_orders_and_signin(
+    app_and_client, db_session
+):
+    """After Admin deletes a buyer (purge or anonymize), cached Clerk JWTs immediately get 401/404."""
+    from app.core.auth import AuthenticatedPrincipal, get_token_verifier
+    from app.models.core_models import AuditLog
+    from app.models.base import new_uuid
+
+    app, client = app_and_client
+    _set_clerk_claims(app, {"sub": "user_sho_live_test_01", "email": "sho.buyer@example.com"})
+
+    # 1. Register buyer "Sho"
+    reg = client.post(
+        "/api/v1/auth/sync",
+        json={
+            "email": "sho.buyer@example.com",
+            "email_verified": True,
+            "first_name": "Sho",
+            "requested_role": "buyer",
+            "auth_mode": "signup",
+        },
+    )
+    assert reg.status_code == 200
+    sho_user_id = reg.json()["user_id"]
+
+    # Add an audit log reference so Admin deletion takes the anonymize path (matching live DB)
+    db_session.add(
+        AuditLog(
+            id=new_uuid(),
+            actor_user_id=sho_user_id,
+            actor_role="CUSTOMER",
+            action="TEST_ACTIVITY",
+            target_type="users",
+            target_id=sho_user_id,
+            correlation_id="corr-sho-01",
+        )
+    )
+    db_session.commit()
+
+    class _StubVerifier:
+        def verify(self, _token: str) -> dict:
+            return {"sub": "user_sho_live_test_01", "email": "sho.buyer@example.com"}
+
+    app.dependency_overrides[get_token_verifier] = lambda: _StubVerifier()
+
+    # Before deletion, cached Bearer token works on /auth/me and /orders/retail/my
+    headers = {"Authorization": "Bearer cached-clerk-jwt"}
+    assert client.get("/api/v1/auth/me", headers=headers).status_code == 200
+    assert client.get("/api/v1/orders/retail/my", headers=headers).status_code == 200
+
+    # 2. Admin deletes "Sho"
+    set_authenticated_principal(
+        app,
+        AuthenticatedPrincipal(
+            user_id="admin-test-01",
+            clerk_user_id="hl_admin_01",
+            email="admin@hunarlink.example",
+            account_status="ACTIVE",
+            roles=frozenset({"ADMIN"}),
+            admin_permissions=frozenset({"guardrails.decide"}),
+            is_active_admin=True,
+        ),
+    )
+    del_resp = client.delete(f"/api/v1/admin/users/{sho_user_id}")
+    assert del_resp.status_code == 200
+    assert del_resp.json()["deleted"] is True
+
+    # 3. Clear admin override -> Sho's still-cached Clerk JWT is immediately rejected!
+    set_authenticated_principal(app, None)
+    me_after = client.get("/api/v1/auth/me", headers=headers)
+    orders_after = client.get("/api/v1/orders/retail/my", headers=headers)
+    signin_after = client.post(
+        "/api/v1/auth/sync",
+        json={
+            "email": "sho.buyer@example.com",
+            "email_verified": True,
+            "first_name": "Sho",
+            "requested_role": "buyer",
+            "auth_mode": "signin",
+        },
+        headers=headers,
+    )
+    chk_after = client.post(
+        "/api/v1/auth/check-account",
+        json={"email": "sho.buyer@example.com", "requested_role": "buyer"},
+    )
+    assert me_after.status_code == 401
+    assert orders_after.status_code == 401
+    assert signin_after.status_code == 404
+    assert chk_after.status_code == 200
+    assert chk_after.json()["exists"] is False
+
+    app.dependency_overrides.pop(get_token_verifier, None)
+    _set_clerk_claims(app, None)
+
+
+
