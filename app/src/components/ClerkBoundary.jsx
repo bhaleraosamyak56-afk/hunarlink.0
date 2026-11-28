@@ -33,6 +33,7 @@ import {
   setPendingClerkRole
 } from '../data/clerkConfig.js';
 import { sanitizeInternalRedirect } from '../utils/safeRedirect.js';
+import { evaluatePassword } from '../utils/passwordPolicy.js';
 
 /* ==========================================================================
    ClerkBoundary — the single file in the app that imports @clerk/react
@@ -1012,8 +1013,11 @@ function ClerkBridgeInner({ children }) {
       const trimmedPassword = String(password || '');
       const normalizedRole = role === 'artisan' ? 'artisan' : 'buyer';
       const normalizedMode = authMode === 'register' || authMode === 'signup' ? 'signup' : 'signin';
-      if (normalizedMode === 'signup' && trimmedPassword && trimmedPassword.length < 15) {
-        throw new Error('Password must be at least 15 characters long.');
+      if (normalizedMode === 'signup' && trimmedPassword) {
+        const pwCheck = evaluatePassword(trimmedPassword);
+        if (!pwCheck.isValid) {
+          throw new Error(pwCheck.errorMessage);
+        }
       }
       setPendingClerkRole(normalizedRole);
       setPendingClerkAuthMode(normalizedMode);
@@ -1180,10 +1184,9 @@ function ClerkBridgeInner({ children }) {
             }
             if (missing.includes('password')) {
               const randTail = `${Math.random().toString(36).slice(2, 10)}${Math.random().toString(36).slice(2, 10)}`;
-              patch.password =
-                trimmedPassword.length >= 15
-                  ? trimmedPassword
-                  : `Hl!Kmr#${randTail.slice(0, 12)}9A@2026`;
+              patch.password = evaluatePassword(trimmedPassword).isValid
+                ? trimmedPassword
+                : `Hl!Kmr#${randTail.slice(0, 12)}9A@2026`;
             }
             if (missing.includes('legal_accepted')) {
               patch.legalAccepted = true;
@@ -1411,8 +1414,9 @@ function ClerkBridgeInner({ children }) {
       if (!cleanedCode) {
         throw new Error('Please enter the 6-digit reset code sent to your email.');
       }
-      if (pwd.length < 15) {
-        throw new Error('New password must be at least 15 characters long.');
+      const pwCheck = evaluatePassword(pwd);
+      if (!pwCheck.isValid) {
+        throw new Error(pwCheck.errorMessage);
       }
       if (!signInLoaded || !signIn) {
         throw new Error('Authentication service is initializing. Please retry.');

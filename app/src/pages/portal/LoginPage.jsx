@@ -18,6 +18,8 @@ import {
 } from '../../components/LineIcons.jsx';
 import { hdSrcFor, srcSetFor } from '../../data/imageVariants.js';
 import { sanitizeInternalRedirect } from '../../utils/safeRedirect.js';
+import { evaluatePassword } from '../../utils/passwordPolicy.js';
+import PasswordChecklist from '../../components/PasswordChecklist.jsx';
 import '../../styles/portal.css';
 
 function GoogleGlyph() {
@@ -277,8 +279,9 @@ export default function LoginPage() {
         );
         return;
       }
-      if (password.length < 15) {
-        setErrMsg('Password must be at least 15 characters long.');
+      const pwCheck = evaluatePassword(password);
+      if (!pwCheck.isValid) {
+        setErrMsg(pwCheck.errorMessage);
         return;
       }
       persistPendingDpdp();
@@ -333,8 +336,8 @@ export default function LoginPage() {
   async function handleVerifyCode(e) {
     e.preventDefault();
     if (!clerk.verifyEmailCode) return;
-    if (pendingFlow === 'signUp' && password && password.length < 15) {
-      setErrMsg('Password must be at least 15 characters long.');
+    if (pendingFlow === 'signUp' && password && !evaluatePassword(password).isValid) {
+      setErrMsg(evaluatePassword(password).errorMessage);
       return;
     }
     setErrMsg('');
@@ -403,8 +406,9 @@ export default function LoginPage() {
       setErrMsg('Clerk password reset is unavailable.');
       return;
     }
-    if (newPassword.length < 15) {
-      setErrMsg('New password must be at least 15 characters long.');
+    const pwCheck = evaluatePassword(newPassword);
+    if (!pwCheck.isValid) {
+      setErrMsg(pwCheck.errorMessage);
       return;
     }
     if (newPassword !== confirmPassword) {
@@ -871,34 +875,20 @@ export default function LoginPage() {
                             </div>
                             <div className="form-field">
                               <label className="up-label" htmlFor="clerk-reset-new-password-input">
-                                New Password (min. 15 characters) *
+                                New Password *
                               </label>
                               <input
                                 id="clerk-reset-new-password-input"
                                 type="password"
                                 className="up-input"
-                                placeholder="Create a new strong password (15+ characters)"
+                                placeholder="Create a strong password"
                                 required
-                                minLength={15}
+                                minLength={8}
                                 autoComplete="new-password"
                                 value={newPassword}
                                 onChange={(e) => setNewPassword(e.target.value)}
                               />
-                              <div
-                                style={{
-                                  fontSize: '0.74rem',
-                                  marginTop: '0.28rem',
-                                  opacity: 0.78,
-                                  color:
-                                    newPassword.length > 0 && newPassword.length < 15
-                                      ? '#b33818'
-                                      : 'inherit'
-                                }}
-                              >
-                                {newPassword.length > 0
-                                  ? `${newPassword.length}/15+ characters`
-                                  : 'Minimum 15 characters required by security policy.'}
-                              </div>
+                              <PasswordChecklist password={newPassword} confirmPassword={confirmPassword} />
                             </div>
                             <div className="form-field">
                               <label className="up-label" htmlFor="clerk-reset-confirm-password-input">
@@ -910,7 +900,7 @@ export default function LoginPage() {
                                 className="up-input"
                                 placeholder="Re-enter your new password"
                                 required
-                                minLength={15}
+                                minLength={8}
                                 autoComplete="new-password"
                                 value={confirmPassword}
                                 onChange={(e) => setConfirmPassword(e.target.value)}
@@ -1035,34 +1025,20 @@ export default function LoginPage() {
                           {authMode === 'register' && (
                             <div className="form-field">
                               <label className="up-label" htmlFor="clerk-reg-password-input">
-                                Create Password (min. 15 characters) *
+                                Create Password *
                               </label>
                               <input
                                 id="clerk-reg-password-input"
                                 type="password"
                                 className="up-input"
-                                placeholder="Create a strong password (15+ characters)"
+                                placeholder="Create a strong password"
                                 required
-                                minLength={15}
+                                minLength={8}
                                 autoComplete="new-password"
                                 value={password}
                                 onChange={(e) => setPassword(e.target.value)}
                               />
-                              <div
-                                style={{
-                                  fontSize: '0.74rem',
-                                  marginTop: '0.28rem',
-                                  opacity: 0.78,
-                                  color:
-                                    password.length > 0 && password.length < 15
-                                      ? '#b33818'
-                                      : 'inherit'
-                                }}
-                              >
-                                {password.length > 0
-                                  ? `${password.length}/15+ characters`
-                                  : 'Minimum 15 characters required by security policy.'}
-                              </div>
+                              <PasswordChecklist password={password} />
                             </div>
                           )}
                           <button
@@ -1113,22 +1089,23 @@ export default function LoginPage() {
                             onChange={(e) => setCode(e.target.value)}
                           />
                         </div>
-                        {pendingFlow === 'signUp' && password.length < 15 && (
+                        {pendingFlow === 'signUp' && !evaluatePassword(password).isValid && (
                           <div className="form-field">
                             <label className="up-label" htmlFor="clerk-verify-password-input">
-                              Create Password (min. 15 characters) *
+                              Create Password *
                             </label>
                             <input
                               id="clerk-verify-password-input"
                               type="password"
                               className="up-input"
-                              placeholder="Create a strong password (15+ characters)"
+                              placeholder="Create a strong password"
                               required
-                              minLength={15}
+                              minLength={8}
                               autoComplete="new-password"
                               value={password}
                               onChange={(e) => setPassword(e.target.value)}
                             />
+                            <PasswordChecklist password={password} />
                           </div>
                         )}
                         <button
