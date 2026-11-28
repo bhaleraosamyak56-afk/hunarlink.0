@@ -316,16 +316,9 @@ export default function AdminPage() {
         appNumber: appItem.application_number,
         storeName: appItem.store_name,
         artisanName: appItem.artisan_name,
-        filename: appItem.artisan_card_filename || 'digilocker-artisan-card',
+        filename: appItem.artisan_card_filename || 'artisan-card',
         applicationId: appItem.id,
-        status: appItem.application_status,
-        verificationSource: appItem.verification_source || null,
-        digilockerMode: appItem.digilocker_mode || null,
-        digilockerIssuerName: appItem.digilocker_issuer_name || null,
-        digilockerCardNumber: appItem.digilocker_card_number || null,
-        digilockerHolderName: appItem.digilocker_holder_name || null,
-        digilockerDocUri: appItem.digilocker_doc_uri || null,
-        digilockerFetchedAt: appItem.digilocker_fetched_at || null
+        status: appItem.application_status
       });
     } catch (err) {
       toast(err?.message || 'Could not retrieve Artisan Card from private DB storage.', 'error');
@@ -344,12 +337,12 @@ export default function AdminPage() {
     if (decision === 'REJECT') {
       const entered = window.prompt(
         `Reason for rejecting ${appItem.store_name} (${appItem.application_number}):`,
-        'DigiLocker Artisan Card details did not match applicant workshop — please re-authenticate via DigiLocker.'
+        'Artisan card image was unclear — please re-upload a clear photo.'
       );
       if (entered === null) return;
       notes = entered.trim();
     } else {
-      notes = 'DigiLocker Artisan Card & GI details verified by Admin and promoted to live directory.';
+      notes = 'Artisan Card / GI details verified by Admin and promoted to live directory.';
     }
 
     setBusyAppId(appItem.id);
@@ -938,12 +931,10 @@ export default function AdminPage() {
               <IconShield size={18} /> Artisan Verification Queue (<code>seller_verification_applications</code>)
             </h2>
             <p style={{ fontSize: '0.85rem', opacity: 0.78, marginBottom: '1.1rem' }}>
-              Every artisan registration (both GI Certified and Standard) authenticates via{' '}
-              <strong>DigiLocker</strong> to fetch their official Artisan Card and stays staged in
-              the database as <code>SUBMITTED / DRAFT</code> until inspected here. Click{' '}
-              <strong>Inspect DigiLocker Card</strong> to verify the fetched card and issuer metadata,
-              then <strong>Verify &amp; Push Live</strong> to promote their <code>seller_profiles</code>{' '}
-              record to <code>APPROVED / ACTIVE</code> (<code>/artisan?id=&lt;uuid&gt;</code>).
+              Every Standard Artisan (with Artisan Card image) or GI Certified registration stays staged
+              in the database as <code>SUBMITTED / DRAFT</code> until verified here. Clicking{' '}
+              <strong>Verify &amp; Push Live</strong> promotes their <code>seller_profiles</code> record to{' '}
+              <code>APPROVED / ACTIVE</code> and publishes their unique workshop URL (<code>/artisan?id=&lt;uuid&gt;</code>).
             </p>
             {(ov.incomplete_artisan_signups || []).length > 0 && (
               <div
@@ -1033,30 +1024,6 @@ export default function AdminPage() {
                             )}
                           </td>
                           <td style={{ padding: '0.55rem' }}>
-                            {appItem.digilocker_card_number && (
-                              <div style={{ fontFamily: 'monospace', fontSize: '0.75rem', fontWeight: 600, marginBottom: '0.18rem' }}>
-                                {appItem.digilocker_card_number}
-                              </div>
-                            )}
-                            {appItem.verification_source === 'DIGILOCKER' && (
-                              <div style={{ marginBottom: '0.25rem' }}>
-                                <span
-                                  style={{
-                                    display: 'inline-block',
-                                    fontSize: '0.68rem',
-                                    fontWeight: 700,
-                                    padding: '0.08rem 0.42rem',
-                                    borderRadius: '4px',
-                                    background:
-                                      appItem.digilocker_mode === 'live' ? '#e7f5ee' : '#e0e7ff',
-                                    color:
-                                      appItem.digilocker_mode === 'live' ? '#166534' : '#3730a3'
-                                  }}
-                                >
-                                  DigiLocker {(appItem.digilocker_mode || 'sandbox').toUpperCase()}
-                                </span>
-                              </div>
-                            )}
                             {appItem.artisan_card_scan_id ? (
                               <button
                                 type="button"
@@ -1064,7 +1031,7 @@ export default function AdminPage() {
                                 style={{ padding: '0.25rem 0.6rem', fontSize: '0.75rem' }}
                                 onClick={() => handleViewArtisanCard(appItem)}
                               >
-                                Inspect DigiLocker Card
+                                View Artisan Card
                               </button>
                             ) : (
                               <span style={{ fontSize: '0.76rem', opacity: 0.6 }}>No card file</span>
@@ -1741,7 +1708,7 @@ export default function AdminPage() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '0.85rem' }}>
               <div>
                 <h3 style={{ margin: 0 }}>
-                  DigiLocker Artisan Card Inspection — {cardPreviewModal.storeName}
+                  Artisan Card Inspection — {cardPreviewModal.storeName}
                 </h3>
                 <div style={{ fontSize: '0.8rem', opacity: 0.75 }}>
                   Application <code>{cardPreviewModal.appNumber}</code> • {cardPreviewModal.artisanName} •{' '}
@@ -1752,49 +1719,6 @@ export default function AdminPage() {
                 Close
               </button>
             </div>
-
-            {cardPreviewModal.verificationSource === 'DIGILOCKER' && (
-              <div
-                style={{
-                  background: '#f1f5f9',
-                  border: '1px solid rgba(30, 64, 175, 0.18)',
-                  borderRadius: '10px',
-                  padding: '0.75rem 0.95rem',
-                  fontSize: '0.8rem',
-                  marginBottom: '0.85rem',
-                  lineHeight: 1.55
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.35rem' }}>
-                  <strong style={{ color: '#1e3a8a' }}>DigiLocker Verified Issuer Metadata</strong>
-                  <span
-                    style={{
-                      fontSize: '0.68rem',
-                      fontWeight: 700,
-                      padding: '0.1rem 0.45rem',
-                      borderRadius: '999px',
-                      background: cardPreviewModal.digilockerMode === 'live' ? '#e7f5ee' : '#e0e7ff',
-                      color: cardPreviewModal.digilockerMode === 'live' ? '#166534' : '#3730a3'
-                    }}
-                  >
-                    {(cardPreviewModal.digilockerMode || 'sandbox').toUpperCase()}
-                  </span>
-                </div>
-                <div>
-                  <strong>Card Holder:</strong> {cardPreviewModal.digilockerHolderName || cardPreviewModal.artisanName}
-                  {' • '}
-                  <strong>Card No:</strong> <code>{cardPreviewModal.digilockerCardNumber || '—'}</code>
-                </div>
-                <div>
-                  <strong>Issuer:</strong> {cardPreviewModal.digilockerIssuerName || 'DigiLocker Issuer'}
-                </div>
-                {cardPreviewModal.digilockerDocUri && (
-                  <div style={{ wordBreak: 'break-all' }}>
-                    <strong>DigiLocker URI:</strong> <code>{cardPreviewModal.digilockerDocUri}</code>
-                  </div>
-                )}
-              </div>
-            )}
 
             <div
               style={{

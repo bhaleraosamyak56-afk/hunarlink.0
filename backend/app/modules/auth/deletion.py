@@ -375,8 +375,6 @@ def execute_user_deletion(
     db.execute(delete(UserAddress).where(UserAddress.user_id == user.id))
     if insp.has_table("user_login_logs"):
         db.execute(delete(UserLoginLog).where(UserLoginLog.user_id == user.id))
-    if insp.has_table("digilocker_verifications"):
-        db.execute(text("DELETE FROM digilocker_verifications WHERE user_id = :uid"), {"uid": user.id})
     if insp.has_table("notifications"):
         db.execute(text("DELETE FROM notifications WHERE user_id = :uid"), {"uid": user.id})
 

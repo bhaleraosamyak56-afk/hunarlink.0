@@ -10,14 +10,10 @@ import {
 } from '../data/clerkConfig.js';
 import {
   canAttemptBackend,
-  completeDigiLockerSandbox,
-  fetchDigiLockerSession,
-  fetchDigiLockerStatus,
-  fetchGuardrailDocumentBlobUrl,
   fetchMyAuthProfile,
-  startDigiLockerAuth,
   submitArtisanVerification,
-  syncAuthenticatedUser
+  syncAuthenticatedUser,
+  uploadGuardrailDocument
 } from '../services/apiClient.js';
 import { IconArrowRight, IconBadgeCheck, IconCheck, IconShield, IconSpark } from '../components/LineIcons.jsx';
 import { hdSrcFor, srcSetFor } from '../data/imageVariants.js';
@@ -66,23 +62,8 @@ export default function AuthPage() {
     skillDescription: '',
     terms: false
   });
-  const [dlStatus, setDlStatus] = useState({ mode: 'sandbox', issuers: [] });
-  const [dlVerification, setDlVerification] = useState(null);
-  const [dlPreviewUrl, setDlPreviewUrl] = useState('');
-  const [dlPreviewLoading, setDlPreviewLoading] = useState(false);
-  const [dlBusy, setDlBusy] = useState(false);
-  const [dlSandboxModal, setDlSandboxModal] = useState({
-    open: false,
-    verificationId: '',
-    issuerId: 'in.gov.handicrafts',
-    artisanCardNumber: '',
-    cardHolderName: '',
-    craftCategory: '',
-    district: 'Srinagar',
-    consentChecked: false,
-    busy: false,
-    error: ''
-  });
+  const [cardFile, setCardFile] = useState(null);
+  const [cardPreviewUrl, setCardPreviewUrl] = useState('');
   const [dbSellerProfile, setDbSellerProfile] = useState(null);
   const [checkingDbStatus, setCheckingDbStatus] = useState(false);
   const [resubmitMode, setResubmitMode] = useState(params.get('edit') === '1');
@@ -177,77 +158,10 @@ export default function AuthPage() {
   }, []);
 
   useEffect(() => {
-    let active = true;
-    if (!canAttemptBackend()) return undefined;
-    fetchDigiLockerStatus()
-      .then((res) => {
-        if (active && res) setDlStatus(res);
-      })
-      .catch(() => {});
     return () => {
-      active = false;
+      if (cardPreviewUrl) URL.revokeObjectURL(cardPreviewUrl);
     };
-  }, []);
-
-  useEffect(() => {
-    const dlErr = params.get('digilocker_error');
-    if (dlErr) {
-      setErrMsg(`DigiLocker authentication failed: ${dlErr}`);
-    }
-  }, [params]);
-
-  const dlPreviewScanRef = useRef('');
-  const dlPreviewObjUrlRef = useRef('');
-  useEffect(() => {
-    let active = true;
-    const scanId = dlVerification?.file_scan_id || '';
-    if (!scanId || !signedIn || !clerk.getToken) {
-      dlPreviewScanRef.current = '';
-      if (dlPreviewObjUrlRef.current) {
-        URL.revokeObjectURL(dlPreviewObjUrlRef.current);
-        dlPreviewObjUrlRef.current = '';
-      }
-      setDlPreviewUrl('');
-      return undefined;
-    }
-    if (dlPreviewScanRef.current === scanId && dlPreviewObjUrlRef.current) {
-      return undefined;
-    }
-    dlPreviewScanRef.current = scanId;
-    setDlPreviewLoading(true);
-    (async () => {
-      try {
-        const token = await clerk.getToken();
-        if (!token || !active) return;
-        const objUrl = await fetchGuardrailDocumentBlobUrl(scanId, token);
-        if (!active) {
-          if (objUrl) URL.revokeObjectURL(objUrl);
-          return;
-        }
-        if (dlPreviewObjUrlRef.current) {
-          URL.revokeObjectURL(dlPreviewObjUrlRef.current);
-        }
-        dlPreviewObjUrlRef.current = objUrl;
-        setDlPreviewUrl(objUrl);
-      } catch {
-        if (active) setDlPreviewUrl('');
-      } finally {
-        if (active) setDlPreviewLoading(false);
-      }
-    })();
-    return () => {
-      active = false;
-    };
-  }, [dlVerification?.file_scan_id, signedIn, clerk]);
-
-  useEffect(() => {
-    return () => {
-      if (dlPreviewObjUrlRef.current) {
-        URL.revokeObjectURL(dlPreviewObjUrlRef.current);
-        dlPreviewObjUrlRef.current = '';
-      }
-    };
-  }, []);
+  }, [cardPreviewUrl]);
 
   const autoCheckedUserIdRef = useRef('');
   const checkingDbRef = useRef(false);
@@ -275,23 +189,6 @@ export default function AuthPage() {
             giId: prev.giId || sp.claimed_gi_authorized_user_no || ''
           }));
           setGiMode(sp.verification_path === 'GI' ? 'with_gi' : 'without_gi');
-          if (sp.digilocker_verification_id && sp.artisan_card_scan_id) {
-            setDlVerification((prev) =>
-              prev?.verification_id === sp.digilocker_verification_id
-                ? prev
-                : {
-                    verification_id: sp.digilocker_verification_id,
-                    mode: sp.digilocker_mode || 'sandbox',
-                    status: 'CONSUMED',
-                    issuer_name: sp.digilocker_issuer_name || 'DigiLocker Artisan Card Issuer',
-                    artisan_card_number: sp.digilocker_card_number || null,
-                    card_holder_name: sp.digilocker_holder_name || null,
-                    doc_uri: sp.digilocker_doc_uri || null,
-                    file_scan_id: sp.artisan_card_scan_id,
-                    fetched_at: sp.digilocker_fetched_at || null
-                  }
-            );
-          }
 
           const isApproved =
             Boolean(me?.artisan_verified) ||
@@ -373,133 +270,31 @@ export default function AuthPage() {
     refreshLiveApplicationStatus();
   }, [signedIn, clerkUser?.id, refreshLiveApplicationStatus]);
 
-  const dlQueryHandledRef = useRef('');
-  useEffect(() => {
-    const dlId = params.get('digilocker_id');
-    const dlState = params.get('digilocker_status');
-    if (!dlId || dlState !== 'fetched' || !signedIn || !clerk.getToken) return;
-    if (dlQueryHandledRef.current === dlId) return;
-    dlQueryHandledRef.current = dlId;
-
-    let active = true;
-    (async () => {
-      try {
-        const token = await clerk.getToken();
-        if (!token || !active) return;
-        const sess = await fetchDigiLockerSession(dlId, token);
-        if (active && sess) {
-          setDlVerification(sess);
-          setResubmitMode(true);
-          toast('Official Artisan Card fetched from DigiLocker!', 'success');
-        }
-      } catch (err) {
-        if (active) {
-          setErrMsg(err?.message || 'Could not load fetched DigiLocker Artisan Card session.');
-        }
-      }
-    })();
-    return () => {
-      active = false;
-    };
-  }, [params, signedIn, clerk, toast]);
-
-  async function handleStartDigiLocker() {
+  function handleCardFileChange(e) {
+    const file = e.target.files?.[0] || null;
     setErrMsg('');
-    if (!signedIn || !clerkUser) {
-      setErrMsg('Please sign in with Clerk first.');
+    if (cardPreviewUrl) {
+      URL.revokeObjectURL(cardPreviewUrl);
+      setCardPreviewUrl('');
+    }
+    if (!file) {
+      setCardFile(null);
       return;
     }
-    if (!canAttemptBackend()) {
-      setErrMsg('FastAPI backend (:8000) is unreachable. Start the backend server to connect DigiLocker.');
+    const allowedExt = /\.(jpe?g|png|webp|pdf)$/i.test(file.name || '');
+    if (!allowedExt) {
+      setErrMsg('Artisan Card must be a JPG, PNG, WebP image, or PDF document.');
+      setCardFile(null);
       return;
     }
-    setDlBusy(true);
-    try {
-      const token = await clerk.getToken();
-      if (!token) throw new Error('Could not obtain Clerk session token. Please sign in again.');
-
-      await syncAuthenticatedUser(
-        {
-          email: clerkEmail,
-          email_verified: Boolean(
-            clerkUser.primaryEmailAddress?.verification?.status === 'verified'
-          ),
-          first_name: clerkUser.firstName || clerkName.split(' ')[0] || 'Artisan',
-          last_name: clerkUser.lastName || null,
-          display_name: clerkName || form.storeName.trim() || 'Artisan',
-          phone: form.phone.trim() || null,
-          requested_role: 'artisan',
-          auth_mode: 'sync'
-        },
-        token
-      );
-
-      const started = await startDigiLockerAuth({ return_to: '/auth?tab=verify' }, token);
-      if (started.mode === 'live' && started.authorize_url) {
-        window.location.assign(started.authorize_url);
-        return;
-      }
-
-      const defaultIssuer = started.issuers?.[0]?.issuer_id || 'in.gov.handicrafts';
-      setDlSandboxModal({
-        open: true,
-        verificationId: started.verification_id,
-        issuerId: defaultIssuer,
-        artisanCardNumber: dlVerification?.artisan_card_number || 'PEH-JK-2026-4812',
-        cardHolderName: clerkName || form.storeName.trim() || 'Artisan Holder',
-        craftCategory: form.craft || 'pashmina',
-        district: form.district || 'Srinagar',
-        consentChecked: false,
-        busy: false,
-        error: ''
-      });
-    } catch (err) {
-      setErrMsg(err?.message || 'Could not initialize DigiLocker authentication.');
-    } finally {
-      setDlBusy(false);
-    }
-  }
-
-  async function handleCompleteSandboxFetch(e) {
-    e.preventDefault();
-    if (!dlSandboxModal.consentChecked) {
-      setDlSandboxModal((s) => ({
-        ...s,
-        error: 'Please check the DigiLocker consent box to share your Artisan Card with HunarLink.'
-      }));
+    if (file.size > 5 * 1024 * 1024) {
+      setErrMsg('Artisan Card file must be under 5 MB.');
+      setCardFile(null);
       return;
     }
-    if (!dlSandboxModal.artisanCardNumber.trim() || !dlSandboxModal.cardHolderName.trim()) {
-      setDlSandboxModal((s) => ({
-        ...s,
-        error: 'Enter your Artisan Card Number and Card Holder Name.'
-      }));
-      return;
-    }
-    setDlSandboxModal((s) => ({ ...s, busy: true, error: '' }));
-    try {
-      const token = await clerk.getToken();
-      if (!token) throw new Error('Session expired. Please sign in again.');
-      const res = await completeDigiLockerSandbox(
-        {
-          verification_id: dlSandboxModal.verificationId,
-          issuer_id: dlSandboxModal.issuerId,
-          artisan_card_number: dlSandboxModal.artisanCardNumber.trim(),
-          card_holder_name: dlSandboxModal.cardHolderName.trim(),
-          craft_category: dlSandboxModal.craftCategory.trim() || form.craft || 'Kashmiri Craft',
-          district: dlSandboxModal.district.trim() || form.district || 'Srinagar'
-        },
-        token
-      );
-      setDlVerification(res);
-      setDlSandboxModal((s) => ({ ...s, open: false, busy: false, error: '' }));
-      toast('Artisan Card fetched via DigiLocker and stored for Admin verification!', 'success');
-    } catch (err) {
-      setDlSandboxModal((s) => ({
-        ...s,
-        busy: false,
-        error: err?.message || 'Could not fetch Artisan Card from DigiLocker Sandbox.'
-      }));
+    setCardFile(file);
+    if (file.type && file.type.startsWith('image/')) {
+      setCardPreviewUrl(URL.createObjectURL(file));
     }
   }
 
@@ -731,10 +526,8 @@ export default function AuthPage() {
       setErrMsg('Enter your GI Certificate / Authorized User Registration Number.');
       return;
     }
-    if (!dlVerification?.verification_id || !dlVerification?.file_scan_id) {
-      setErrMsg(
-        'DigiLocker Artisan Card authentication is required for all artisans. Click "Authenticate & Fetch via DigiLocker" first.'
-      );
+    if (giMode === 'without_gi' && !cardFile) {
+      setErrMsg('Please upload your Artisan Card image (J&K Handicrafts / Pehchan / Workshop ID) for Admin verification.');
       return;
     }
     if (!form.terms) {
@@ -770,7 +563,15 @@ export default function AuthPage() {
         token
       );
 
-      // 2. Stage application in `seller_verification_applications` + `seller_documents` + `seller_profiles` using DigiLocker verified card
+      // 2. Upload Artisan Card / GI Certificate to private scanned DB storage (`file_security_scans`)
+      let uploadedScanId = null;
+      if (cardFile) {
+        const uploadScope = giMode === 'with_gi' ? 'gi_certificate' : 'artisan_card';
+        const uploadRes = await uploadGuardrailDocument(cardFile, uploadScope, token);
+        uploadedScanId = uploadRes.scan_id;
+      }
+
+      // 3. Stage application in `seller_verification_applications` + `seller_documents` + `seller_profiles` (SUBMITTED / DRAFT)
       const submitRes = await submitArtisanVerification(
         {
           store_name: form.storeName.trim(),
@@ -778,7 +579,7 @@ export default function AuthPage() {
           workshop_district: form.district,
           verification_path: giMode === 'with_gi' ? 'GI' : 'NON_GI',
           claimed_gi_code: giMode === 'with_gi' ? form.giId.trim() : null,
-          digilocker_verification_id: dlVerification.verification_id,
+          artisan_card_scan_id: uploadedScanId,
           skill_description: form.skillDescription.trim() || null,
           phone: form.phone.trim() || null
         },
@@ -822,14 +623,7 @@ export default function AuthPage() {
         ...sp,
         latest_application_id: submitRes.application_id,
         latest_application_number: submitRes.application_number,
-        latest_application_status: submitRes.application_status,
-        artisan_card_scan_id: dlVerification.file_scan_id,
-        digilocker_verification_id: dlVerification.verification_id,
-        digilocker_mode: dlVerification.mode,
-        digilocker_issuer_name: dlVerification.issuer_name,
-        digilocker_card_number: dlVerification.artisan_card_number,
-        digilocker_holder_name: dlVerification.card_holder_name,
-        digilocker_doc_uri: dlVerification.doc_uri
+        latest_application_status: submitRes.application_status
       });
       setResubmitMode(false);
       await hydrateFromBackend(token);
@@ -1418,40 +1212,8 @@ export default function AuthPage() {
                     <strong>Track:</strong>{' '}
                     {dbSellerProfile.verification_path === 'GI'
                       ? `GI Certified (${dbSellerProfile.claimed_gi_authorized_user_no || 'Submitted'})`
-                      : 'Standard Artisan'}
+                      : 'Standard Artisan (Artisan Card Uploaded)'}
                   </div>
-                  <div>
-                    <strong>DigiLocker Proof:</strong>{' '}
-                    {dbSellerProfile.digilocker_card_number || 'Verified Card'} •{' '}
-                    {dbSellerProfile.digilocker_issuer_name || 'DigiLocker Issuer'}{' '}
-                    <span
-                      style={{
-                        fontSize: '0.72rem',
-                        fontWeight: 700,
-                        padding: '0.1rem 0.4rem',
-                        borderRadius: '4px',
-                        background:
-                          dbSellerProfile.digilocker_mode === 'live' ? '#e7f5ee' : '#eef2ff',
-                        color: dbSellerProfile.digilocker_mode === 'live' ? '#166534' : '#3730a3'
-                      }}
-                    >
-                      {(dbSellerProfile.digilocker_mode || 'sandbox').toUpperCase()}
-                    </span>
-                  </div>
-                  {dlPreviewUrl && (
-                    <div style={{ marginTop: '0.5rem' }}>
-                      <img
-                        src={dlPreviewUrl}
-                        alt="Fetched DigiLocker Artisan Card"
-                        style={{
-                          width: '100%',
-                          maxWidth: '280px',
-                          borderRadius: '8px',
-                          border: '1px solid rgba(0,0,0,0.12)'
-                        }}
-                      />
-                    </div>
-                  )}
                   <div>
                     <strong>District &amp; Craft:</strong> {dbSellerProfile.workshop_district} •{' '}
                     {dbSellerProfile.craft_specialty}
@@ -1478,7 +1240,7 @@ export default function AuthPage() {
                     className="btn-orange-outline"
                     onClick={() => setResubmitMode(true)}
                   >
-                    Update / Re-fetch DigiLocker Card
+                    Update / Re-upload Card
                   </button>
                 </div>
               </div>
@@ -1604,142 +1366,91 @@ export default function AuthPage() {
                   />
                 </div>
 
-                {giMode === 'with_gi' && (
+                {giMode === 'with_gi' ? (
+                  <>
+                    <div className="form-field">
+                      <label className="up-label" htmlFor="art-gi">
+                        GI Registration / Authorized User Number *
+                      </label>
+                      <input
+                        id="art-gi"
+                        type="text"
+                        className="up-input"
+                        placeholder="e.g. GI-JK-PASH-8821"
+                        required
+                        value={form.giId}
+                        onChange={(e) => setForm((f) => ({ ...f, giId: e.target.value }))}
+                      />
+                    </div>
+                    <div className="form-field">
+                      <label className="up-label" htmlFor="art-card-gi">
+                        GI Certificate / Artisan Card Image (Optional — JPG, PNG, WebP, PDF)
+                      </label>
+                      <input
+                        id="art-card-gi"
+                        type="file"
+                        accept=".jpg,.jpeg,.png,.webp,.pdf,image/jpeg,image/png,image/webp,application/pdf"
+                        className="up-input"
+                        onChange={handleCardFileChange}
+                      />
+                    </div>
+                  </>
+                ) : (
                   <div className="form-field">
-                    <label className="up-label" htmlFor="art-gi">
-                      GI Registration / Authorized User Number *
+                    <label className="up-label" htmlFor="art-card-std">
+                      Artisan Card Image (J&amp;K Handicrafts / Pehchan Card) *
                     </label>
                     <input
-                      id="art-gi"
-                      type="text"
-                      className="up-input"
-                      placeholder="e.g. GI-JK-PASH-8821"
+                      id="art-card-std"
+                      type="file"
                       required
-                      value={form.giId}
-                      onChange={(e) => setForm((f) => ({ ...f, giId: e.target.value }))}
+                      accept=".jpg,.jpeg,.png,.webp,.pdf,image/jpeg,image/png,image/webp,application/pdf"
+                      className="up-input"
+                      onChange={handleCardFileChange}
                     />
+                    <span style={{ display: 'block', fontSize: '0.76rem', opacity: 0.75, marginTop: '0.28rem' }}>
+                      Sent directly to private DB storage for Admin verification before activating your artisan profile.
+                    </span>
                   </div>
                 )}
 
-                <div
-                  className="form-field"
-                  style={{
-                    padding: '0.9rem 1rem',
-                    borderRadius: '12px',
-                    background: dlVerification ? '#f1f9f4' : '#f4f7fb',
-                    border: dlVerification
-                      ? '1px solid rgba(22, 101, 52, 0.25)'
-                      : '1px solid rgba(30, 64, 175, 0.2)',
-                    marginBottom: '0.95rem'
-                  }}
-                >
+                {cardFile && (
                   <div
                     style={{
                       display: 'flex',
                       alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: '0.5rem',
-                      marginBottom: '0.45rem'
+                      gap: '0.75rem',
+                      padding: '0.55rem 0.75rem',
+                      borderRadius: '8px',
+                      background: '#f7f3ec',
+                      border: '1px solid rgba(0,0,0,0.08)',
+                      marginBottom: '0.75rem',
+                      fontSize: '0.8rem'
                     }}
                   >
-                    <span className="up-label" style={{ marginBottom: 0 }}>
-                      DigiLocker Artisan Card Authentication *
-                    </span>
-                    <span
-                      style={{
-                        fontSize: '0.72rem',
-                        fontWeight: 700,
-                        padding: '0.12rem 0.48rem',
-                        borderRadius: '999px',
-                        background: dlStatus?.mode === 'live' ? '#e7f5ee' : '#e0e7ff',
-                        color: dlStatus?.mode === 'live' ? '#166534' : '#3730a3'
-                      }}
-                    >
-                      {dlStatus?.mode === 'live' ? 'DigiLocker Live OAuth' : 'DigiLocker Sandbox'}
-                    </span>
-                  </div>
-
-                  {!dlVerification ? (
-                    <>
-                      <p style={{ fontSize: '0.82rem', margin: '0 0 0.7rem', color: '#334155', lineHeight: 1.45 }}>
-                        Required for all registering artisans (both GI Certified &amp; Standard):
-                        authenticate via DigiLocker to automatically fetch your official Artisan Card
-                        (Pehchan / J&amp;K Handicrafts) for Admin confirmation. Manual file uploads
-                        are disabled to prevent forged documents.
-                      </p>
-                      <button
-                        type="button"
-                        className="btn-orange-outline"
+                    {cardPreviewUrl && (
+                      <img
+                        src={cardPreviewUrl}
+                        alt="Artisan card preview"
                         style={{
-                          width: '100%',
-                          justifyContent: 'center',
-                          borderColor: '#1d4ed8',
-                          color: '#1d4ed8',
-                          background: '#ffffff'
+                          width: '54px',
+                          height: '40px',
+                          objectFit: 'cover',
+                          borderRadius: '5px',
+                          border: '1px solid rgba(0,0,0,0.12)'
                         }}
-                        disabled={dlBusy}
-                        onClick={handleStartDigiLocker}
-                      >
-                        <IconShield size={15} />
-                        {dlBusy
-                          ? 'Connecting to DigiLocker…'
-                          : 'Authenticate & Fetch Artisan Card via DigiLocker'}
-                      </button>
-                    </>
-                  ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
-                      <div style={{ fontSize: '0.82rem', color: '#14532d', fontWeight: 600 }}>
-                        ✓ Artisan Card Fetched from DigiLocker ({(dlVerification.mode || 'sandbox').toUpperCase()})
+                      />
+                    )}
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {cardFile.name}
                       </div>
-                      <div style={{ fontSize: '0.8rem', lineHeight: 1.5, color: '#1f2937' }}>
-                        <div>
-                          <strong>Card No:</strong>{' '}
-                          <code>{dlVerification.artisan_card_number || 'VERIFIED'}</code>
-                        </div>
-                        <div>
-                          <strong>Holder:</strong> {dlVerification.card_holder_name || clerkName}
-                        </div>
-                        <div>
-                          <strong>Issuer:</strong> {dlVerification.issuer_name}
-                        </div>
-                        {dlVerification.doc_uri && (
-                          <div style={{ wordBreak: 'break-all' }}>
-                            <strong>DigiLocker URI:</strong> <code>{dlVerification.doc_uri}</code>
-                          </div>
-                        )}
-                      </div>
-                      {dlPreviewLoading ? (
-                        <div style={{ fontSize: '0.78rem', opacity: 0.75 }}>
-                          Loading fetched Artisan Card preview…
-                        </div>
-                      ) : (
-                        dlPreviewUrl && (
-                          <img
-                            src={dlPreviewUrl}
-                            alt="DigiLocker fetched Artisan Card"
-                            style={{
-                              width: '100%',
-                              maxWidth: '300px',
-                              borderRadius: '8px',
-                              border: '1px solid rgba(0,0,0,0.14)'
-                            }}
-                          />
-                        )
-                      )}
-                      <div>
-                        <button
-                          type="button"
-                          className="btn-orange-outline"
-                          style={{ fontSize: '0.78rem', padding: '0.35rem 0.7rem' }}
-                          disabled={dlBusy}
-                          onClick={handleStartDigiLocker}
-                        >
-                          {dlBusy ? 'Connecting…' : 'Re-fetch via DigiLocker'}
-                        </button>
+                      <div style={{ fontSize: '0.74rem', opacity: 0.7 }}>
+                        {(cardFile.size / 1024).toFixed(1)} KB • Ready for ASIGS malware &amp; signature scan
                       </div>
                     </div>
-                  )}
-                </div>
+                  </div>
+                )}
 
                 <div className="form-field">
                   <label className="up-label" htmlFor="art-bio">
@@ -1770,7 +1481,7 @@ export default function AuthPage() {
                     onChange={(e) => setForm((f) => ({ ...f, terms: e.target.checked }))}
                   />
                   <span>
-                    I declare that all craft details and the DigiLocker Artisan Card presented are
+                    I declare that all craft details and Artisan Card / GI documents submitted are
                     genuine and produced in Jammu &amp; Kashmir.
                   </span>
                 </label>
@@ -1779,12 +1490,10 @@ export default function AuthPage() {
                   type="submit"
                   className="btn-orange"
                   style={{ width: '100%', justifyContent: 'center' }}
-                  disabled={submitting || !dlVerification}
+                  disabled={submitting}
                 >
                   <IconCheck size={15} />
-                  {submitting
-                    ? 'Staging DigiLocker verification in DB…'
-                    : 'Submit for Admin Verification'}
+                  {submitting ? 'Uploading & staging in DB…' : 'Submit for Admin Verification'}
                   <IconArrowRight size={14} />
                 </button>
               </form>
@@ -1792,191 +1501,6 @@ export default function AuthPage() {
           </div>
         </section>
       </main>
-
-      {dlSandboxModal.open && (
-        <div
-          className="up-modal-backdrop"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="dl-sandbox-title"
-          onClick={() => !dlSandboxModal.busy && setDlSandboxModal((s) => ({ ...s, open: false }))}
-        >
-          <div
-            className="up-modal"
-            style={{ maxWidth: '500px' }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="up-modal-head" style={{ borderBottomColor: 'rgba(29, 78, 216, 0.16)' }}>
-              <div>
-                <span
-                  style={{
-                    display: 'inline-block',
-                    fontSize: '0.7rem',
-                    fontWeight: 700,
-                    padding: '0.15rem 0.5rem',
-                    borderRadius: '999px',
-                    background: '#e0e7ff',
-                    color: '#3730a3',
-                    marginBottom: '0.3rem'
-                  }}
-                >
-                  DIGILOCKER SANDBOX CONSENT (NON-PROD)
-                </span>
-                <h3 id="dl-sandbox-title" style={{ margin: 0 }}>
-                  MeriPehchaan / DigiLocker Artisan Card Consent
-                </h3>
-              </div>
-              <button
-                type="button"
-                className="up-modal-close"
-                aria-label="Close"
-                disabled={dlSandboxModal.busy}
-                onClick={() => setDlSandboxModal((s) => ({ ...s, open: false }))}
-              >
-                ×
-              </button>
-            </div>
-            <form onSubmit={handleCompleteSandboxFetch} style={{ padding: '1rem 1.25rem 1.25rem' }}>
-              <p style={{ fontSize: '0.82rem', color: '#475569', marginTop: 0, lineHeight: 1.45 }}>
-                Confirm consent below to pull your digitally signed Artisan Card into HunarLink&apos;s
-                private verification vault for Admin review. (Live OAuth engages automatically when{' '}
-                <code>DIGILOCKER_CLIENT_ID</code> is configured.)
-              </p>
-              {dlSandboxModal.error && (
-                <div className="login-error show" style={{ marginBottom: '0.75rem' }}>
-                  {dlSandboxModal.error}
-                </div>
-              )}
-
-              <div className="form-field">
-                <label className="up-label" htmlFor="dl-issuer">Issuing Authority *</label>
-                <select
-                  id="dl-issuer"
-                  className="up-select"
-                  value={dlSandboxModal.issuerId}
-                  onChange={(e) => setDlSandboxModal((s) => ({ ...s, issuerId: e.target.value }))}
-                >
-                  {(dlStatus?.issuers?.length
-                    ? dlStatus.issuers
-                    : [
-                        {
-                          issuer_id: 'in.gov.handicrafts',
-                          label: 'DC (Handicrafts) — Pehchan Artisan Card'
-                        },
-                        {
-                          issuer_id: 'in.gov.jk.handicrafts',
-                          label: 'Directorate of Handicrafts & Handloom, J&K'
-                        }
-                      ]
-                  ).map((iss) => (
-                    <option key={iss.issuer_id} value={iss.issuer_id}>
-                      {iss.label || iss.issuer_name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="form-field">
-                <label className="up-label" htmlFor="dl-card-no">Pehchan / Artisan Card Number *</label>
-                <input
-                  id="dl-card-no"
-                  type="text"
-                  className="up-input"
-                  required
-                  placeholder="e.g. PEH-JK-2026-4812"
-                  value={dlSandboxModal.artisanCardNumber}
-                  onChange={(e) =>
-                    setDlSandboxModal((s) => ({ ...s, artisanCardNumber: e.target.value }))
-                  }
-                />
-              </div>
-
-              <div className="form-field">
-                <label className="up-label" htmlFor="dl-holder">Card Holder Full Name *</label>
-                <input
-                  id="dl-holder"
-                  type="text"
-                  className="up-input"
-                  required
-                  value={dlSandboxModal.cardHolderName}
-                  onChange={(e) =>
-                    setDlSandboxModal((s) => ({ ...s, cardHolderName: e.target.value }))
-                  }
-                />
-              </div>
-
-              <div className="up-grid-2">
-                <div className="form-field">
-                  <label className="up-label" htmlFor="dl-craft">Craft Category *</label>
-                  <input
-                    id="dl-craft"
-                    type="text"
-                    className="up-input"
-                    required
-                    value={dlSandboxModal.craftCategory}
-                    onChange={(e) =>
-                      setDlSandboxModal((s) => ({ ...s, craftCategory: e.target.value }))
-                    }
-                  />
-                </div>
-                <div className="form-field">
-                  <label className="up-label" htmlFor="dl-dist">District *</label>
-                  <input
-                    id="dl-dist"
-                    type="text"
-                    className="up-input"
-                    required
-                    value={dlSandboxModal.district}
-                    onChange={(e) =>
-                      setDlSandboxModal((s) => ({ ...s, district: e.target.value }))
-                    }
-                  />
-                </div>
-              </div>
-
-              <label
-                style={{
-                  display: 'flex',
-                  alignItems: 'flex-start',
-                  gap: '0.5rem',
-                  fontSize: '0.82rem',
-                  margin: '0.75rem 0 1rem'
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={dlSandboxModal.consentChecked}
-                  onChange={(e) =>
-                    setDlSandboxModal((s) => ({ ...s, consentChecked: e.target.checked }))
-                  }
-                />
-                <span>
-                  I authorize <strong>DigiLocker (MeriPehchaan)</strong> to share my issued Artisan
-                  Card document &amp; issuer metadata with HunarLink for seller verification.
-                </span>
-              </label>
-
-              <div style={{ display: 'flex', gap: '0.65rem', justifyContent: 'flex-end' }}>
-                <button
-                  type="button"
-                  className="btn-orange-outline"
-                  disabled={dlSandboxModal.busy}
-                  onClick={() => setDlSandboxModal((s) => ({ ...s, open: false }))}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="btn-orange"
-                  disabled={dlSandboxModal.busy}
-                >
-                  {dlSandboxModal.busy ? 'Fetching Artisan Card…' : 'Authorize & Fetch Card'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

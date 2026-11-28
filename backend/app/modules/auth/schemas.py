@@ -69,13 +69,6 @@ class SellerProfileBrief(BaseModel):
     latest_application_number: str | None = None
     latest_application_status: str | None = None
     artisan_card_scan_id: str | None = None
-    digilocker_verification_id: str | None = None
-    digilocker_mode: str | None = None
-    digilocker_issuer_name: str | None = None
-    digilocker_card_number: str | None = None
-    digilocker_holder_name: str | None = None
-    digilocker_doc_uri: str | None = None
-    digilocker_fetched_at: str | None = None
     review_decision_notes: str | None = None
 
 
@@ -137,66 +130,9 @@ class ArtisanVerificationSubmitRequest(BaseModel):
     workshop_district: str = Field(..., min_length=2, max_length=100)
     verification_path: Literal["GI", "NON_GI", "STANDARD"] = "NON_GI"
     claimed_gi_code: str | None = Field(default=None, max_length=120)
-    digilocker_verification_id: str | None = Field(default=None, max_length=64)
     artisan_card_scan_id: str | None = Field(default=None, max_length=64)
     skill_description: str | None = Field(default=None, max_length=2000)
     phone: str | None = Field(default=None, max_length=32)
-
-
-class DigiLockerIssuerItem(BaseModel):
-    issuer_id: str
-    issuer_name: str
-    doc_type: str
-    label: str
-
-
-class DigiLockerStatusResponse(BaseModel):
-    mode: Literal["live", "sandbox"]
-    live_configured: bool
-    issuers: list[DigiLockerIssuerItem] = Field(default_factory=list)
-
-
-class DigiLockerStartRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    return_to: str | None = Field(default="/auth?tab=verify", max_length=255)
-
-
-class DigiLockerStartResponse(BaseModel):
-    verification_id: str
-    state: str
-    mode: Literal["live", "sandbox"]
-    authorize_url: str | None = None
-    issuers: list[DigiLockerIssuerItem] = Field(default_factory=list)
-    expires_at: datetime
-
-
-class DigiLockerSandboxCompleteRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    verification_id: str = Field(..., min_length=8, max_length=64)
-    issuer_id: str = Field(default="in.gov.handicrafts", min_length=3, max_length=128)
-    artisan_card_number: str = Field(..., min_length=4, max_length=100)
-    card_holder_name: str = Field(..., min_length=2, max_length=160)
-    craft_category: str = Field(default="Kashmiri Handloom & Craft", min_length=2, max_length=160)
-    district: str = Field(default="Srinagar", min_length=2, max_length=120)
-
-
-class DigiLockerVerificationResponse(BaseModel):
-    verification_id: str
-    mode: str
-    status: str
-    issuer_id: str | None = None
-    issuer_name: str | None = None
-    doc_type: str | None = None
-    doc_uri: str | None = None
-    artisan_card_number: str | None = None
-    card_holder_name: str | None = None
-    craft_category: str | None = None
-    district: str | None = None
-    issued_date: str | None = None
-    file_scan_id: str | None = None
-    fetched_at: datetime | None = None
 
 
 class ArtisanVerificationSubmitResponse(BaseModel):

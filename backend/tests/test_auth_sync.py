@@ -115,33 +115,6 @@ def test_03_auth_sync_blocks_admin_role_and_extra_fields(app_and_client):
     _set_clerk_claims(app, None)
 
 
-def _fetch_sandbox_digilocker_card(
-    client,
-    *,
-    card_no: str = "PEH-JK-2026-4812",
-    holder_name: str = "Kashmir Artisan",
-    craft_category: str = "pashmina",
-    district: str = "Srinagar",
-    issuer_id: str = "in.gov.handicrafts",
-) -> dict:
-    start = client.post("/api/v1/auth/digilocker/start", json={"return_to": "/auth?tab=verify"})
-    assert start.status_code == 200, start.text
-    vid = start.json()["verification_id"]
-    done = client.post(
-        "/api/v1/auth/digilocker/sandbox-complete",
-        json={
-            "verification_id": vid,
-            "issuer_id": issuer_id,
-            "artisan_card_number": card_no,
-            "card_holder_name": holder_name,
-            "craft_category": craft_category,
-            "district": district,
-        },
-    )
-    assert done.status_code == 200, done.text
-    return done.json()
-
-
 def test_04_artisan_sync_and_verification_persists_seller_profile_without_self_approval(
     app_and_client, db_session
 ):
@@ -174,14 +147,6 @@ def test_04_artisan_sync_and_verification_persists_seller_profile_without_self_a
     assert me_resp.status_code == 200
     assert me_resp.json()["user_id"] == synced["user_id"]
 
-    dl_card = _fetch_sandbox_digilocker_card(
-        client,
-        card_no="PEH-JK-2026-9911",
-        holder_name="Farooq Dar",
-        craft_category="Pashmina Handloom",
-        district="Srinagar",
-    )
-
     ver_resp = client.post(
         "/api/v1/auth/artisan-verification",
         json={
@@ -190,7 +155,6 @@ def test_04_artisan_sync_and_verification_persists_seller_profile_without_self_a
             "workshop_district": "Srinagar",
             "verification_path": "GI",
             "claimed_gi_code": "GI-JK-PASH-9911",
-            "digilocker_verification_id": dl_card["verification_id"],
             "skill_description": "Third-generation hand-spun Changthangi pashmina weavers.",
             "phone": "+91 9906123456",
         },
@@ -491,7 +455,7 @@ def test_08_standard_artisan_requires_card_image_stays_staged_until_admin_verifi
     artisan_principal = load_principal_by_clerk_id(db_session, "user_2stdArtisanCard01")
     set_authenticated_principal(app, artisan_principal)
 
-    # 2. Submitting `STANDARD` without DigiLocker Artisan Card auth returns clear 422
+    # 2. Submitting `STANDARD` without an uploaded Artisan Card image returns clear 422
     missing_card = client.post(
         "/api/v1/auth/artisan-verification",
         json={
@@ -503,23 +467,24 @@ def test_08_standard_artisan_requires_card_image_stays_staged_until_admin_verifi
         },
     )
     assert missing_card.status_code == 422
-    assert "DigiLocker" in missing_card.json()["detail"]
+    assert "Artisan Card" in missing_card.json()["detail"]
 
-    # 3. Artisan authenticates via DigiLocker & fetches official Pehchan Artisan Card PNG -> `file_security_scans`
-    dl_res = _fetch_sandbox_digilocker_card(
-        client,
-        card_no="PEH-JK-2026-4812",
-        holder_name="Samyak Bhalerao",
-        craft_category="pashmina",
-        district="Srinagar",
+    # 3. Artisan uploads valid PNG Artisan Card image -> stored in `file_security_scans`
+    valid_png = (
+        b"\x89PNG\r\n\x1a\n"
+        b"\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde"
+        b"\x00\x00\x00\x0cIDATx\x9cc\xf8\xcf\xc0\x00\x00\x03\x01\x01\x00\x18\xdd\x8d\xb0"
+        b"\x00\x00\x00\x00IEND\xaeB`\x82"
     )
-    scan_id = dl_res["file_scan_id"]
-    dl_ver_id = dl_res["verification_id"]
-    assert scan_id
-    assert dl_res["mode"] == "sandbox"
-    assert dl_res["status"] == "FETCHED"
+    up_resp = client.post(
+        "/api/v1/guardrails/documents/upload",
+        data={"owner_scope": "artisan_card"},
+        files={"file": ("artisan_pehchan_card.png", valid_png, "image/png")},
+    )
+    assert up_resp.status_code == 201
+    scan_id = up_resp.json()["scan_id"]
 
-    # 4. Artisan submits Standard verification referencing `digilocker_verification_id`
+    # 4. Artisan submits Standard verification with `artisan_card_scan_id`
     sub_resp = client.post(
         "/api/v1/auth/artisan-verification",
         json={
@@ -527,7 +492,7 @@ def test_08_standard_artisan_requires_card_image_stays_staged_until_admin_verifi
             "craft_specialty": "pashmina",
             "workshop_district": "Srinagar",
             "verification_path": "STANDARD",
-            "digilocker_verification_id": dl_ver_id,
+            "artisan_card_scan_id": scan_id,
             "skill_description": "Handloom Pashmina weaving studio in Srinagar.",
             "phone": "9419012345",
         },
@@ -540,15 +505,14 @@ def test_08_standard_artisan_requires_card_image_stays_staged_until_admin_verifi
     assert sub_body["seller_profile"]["verification_status"] == "SUBMITTED"
     assert sub_body["seller_profile"]["profile_status"] == "DRAFT"
     assert sub_body["seller_profile"]["verification_path"] == "NON_GI"
-    assert sub_body["seller_profile"]["digilocker_card_number"] == "PEH-JK-2026-4812"
 
     # 5. Staged artisan is NOT yet in public `/api/v1/artisans` or `/api/v1/artisans/detail?id=`
     pub_list = client.get("/api/v1/artisans").json()
     assert all(a["seller_profile_id"] != seller_uuid for a in pub_list)
     assert client.get(f"/api/v1/artisans/detail?id={seller_uuid}").status_code == 404
 
-    # 6. Admin opens `/api/v1/admin/overview`, sees the pending application + DigiLocker metadata + card scan_id,
-    #    fetches the Artisan Card PNG bytes, and clicks Verify & Push Live (`APPROVE`)
+    # 6. Admin opens `/api/v1/admin/overview`, sees the pending application + card scan_id,
+    #    fetches the Artisan Card image bytes, and clicks Verify & Push Live (`APPROVE`)
     set_authenticated_principal(app, entities["admin_principal"])
     ov = client.get("/api/v1/admin/overview")
     assert ov.status_code == 200
@@ -557,18 +521,14 @@ def test_08_standard_artisan_requires_card_image_stays_staged_until_admin_verifi
     staged_entry = next(a for a in ov_data["artisan_applications"] if a["id"] == app_id)
     assert staged_entry["store_name"] == "Velly Loom"
     assert staged_entry["artisan_card_scan_id"] == scan_id
-    assert staged_entry["verification_source"] == "DIGILOCKER"
-    assert staged_entry["digilocker_verification_id"] == dl_ver_id
-    assert staged_entry["digilocker_card_number"] == "PEH-JK-2026-4812"
 
     card_dl = client.get(f"/api/v1/guardrails/documents/{scan_id}")
     assert card_dl.status_code == 200
     assert card_dl.headers["content-type"] == "image/png"
-    assert card_dl.content.startswith(b"\x89PNG")
 
     approve = client.post(
         f"/api/v1/admin/artisan-applications/{app_id}/decision",
-        json={"decision": "APPROVE", "notes": "DigiLocker Pehchan Artisan Card verified."},
+        json={"decision": "APPROVE", "notes": "Pehchan Artisan Card verified."},
     )
     assert approve.status_code == 200
     assert approve.json()["verification_status"] == "APPROVED"
@@ -666,13 +626,6 @@ def test_09_existing_user_cannot_reregister_and_unverified_artisan_flagged_until
             roles=frozenset({"DIRECT_SELLER", "CUSTOMER"}),
         ),
     )
-    dl_gi = _fetch_sandbox_digilocker_card(
-        client,
-        card_no="PEH-JK-2026-9910",
-        holder_name="Bilal Dar",
-        craft_category="Pashmina Textiles",
-        district="Srinagar",
-    )
     sub = client.post(
         "/api/v1/auth/artisan-verification",
         json={
@@ -681,7 +634,6 @@ def test_09_existing_user_cannot_reregister_and_unverified_artisan_flagged_until
             "workshop_district": "Srinagar",
             "verification_path": "GI",
             "claimed_gi_code": "GI-JK-PASH-9910",
-            "digilocker_verification_id": dl_gi["verification_id"],
         },
     )
     assert sub.status_code == 201
@@ -1724,298 +1676,6 @@ def test_24_admin_deleted_user_immediately_rejected_by_me_orders_and_signin(
 
     app.dependency_overrides.pop(get_token_verifier, None)
     _set_clerk_claims(app, None)
-
-
-def test_22_digilocker_mandatory_blocks_manual_upload_and_cross_user_access(app_and_client, db_session):
-    """Verify DigiLocker enforcement across GI + Standard, buyer role lock, cross-user guard, and prod lockout."""
-    from app.core.auth import AuthenticatedPrincipal, load_principal_by_clerk_id
-    from app.core.config import Settings, get_settings
-    from tests.conftest import set_authenticated_principal
-
-    app, client = app_and_client
-    _set_clerk_claims(app, {"sub": "user_2dlGuardArtisan01"})
-    client.post(
-        "/api/v1/auth/sync",
-        json={"email": "dl.guard1@example.com", "first_name": "Tariq", "requested_role": "artisan"},
-    )
-    _set_clerk_claims(app, {"sub": "user_2dlGuardArtisan02"})
-    client.post(
-        "/api/v1/auth/sync",
-        json={"email": "dl.guard2@example.com", "first_name": "Zaid", "requested_role": "artisan"},
-    )
-    _set_clerk_claims(app, {"sub": "user_2dlGuardBuyer01"})
-    client.post(
-        "/api/v1/auth/sync",
-        json={"email": "dl.buyer@example.com", "first_name": "Meera", "requested_role": "buyer"},
-    )
-    _set_clerk_claims(app, None)
-
-    p_art1 = load_principal_by_clerk_id(db_session, "user_2dlGuardArtisan01")
-    p_art2 = load_principal_by_clerk_id(db_session, "user_2dlGuardArtisan02")
-    p_buyer = load_principal_by_clerk_id(db_session, "user_2dlGuardBuyer01")
-
-    # 1. Buyer cannot initiate DigiLocker artisan card auth
-    set_authenticated_principal(app, p_buyer)
-    assert client.post("/api/v1/auth/digilocker/start", json={}).status_code == 403
-
-    # 2. Artisan 1 uploads raw file directly -> trying to bypass DigiLocker via `artisan_card_scan_id` alone is blocked (422)
-    set_authenticated_principal(app, p_art1)
-    valid_png = (
-        b"\x89PNG\r\n\x1a\n"
-        b"\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde"
-        b"\x00\x00\x00\x0cIDATx\x9cc\xf8\xcf\xc0\x00\x00\x03\x01\x01\x00\x18\xdd\x8d\xb0"
-        b"\x00\x00\x00\x00IEND\xaeB`\x82"
-    )
-    up_resp = client.post(
-        "/api/v1/guardrails/documents/upload",
-        data={"owner_scope": "artisan_card"},
-        files={"file": ("manual.png", valid_png, "image/png")},
-    )
-    assert up_resp.status_code == 201
-    manual_scan_id = up_resp.json()["scan_id"]
-
-    bypass_std = client.post(
-        "/api/v1/auth/artisan-verification",
-        json={
-            "store_name": "Bypass Craft",
-            "craft_specialty": "pashmina",
-            "workshop_district": "Srinagar",
-            "verification_path": "STANDARD",
-            "artisan_card_scan_id": manual_scan_id,
-        },
-    )
-    assert bypass_std.status_code == 422
-    assert "DigiLocker" in bypass_std.json()["detail"]
-
-    # GI Certified track ALSO requires DigiLocker authentication
-    missing_gi_dl = client.post(
-        "/api/v1/auth/artisan-verification",
-        json={
-            "store_name": "No DigiLocker GI",
-            "craft_specialty": "pashmina",
-            "workshop_district": "Srinagar",
-            "verification_path": "GI",
-            "claimed_gi_code": "GI-JK-1234",
-        },
-    )
-    assert missing_gi_dl.status_code == 422
-    assert "DigiLocker" in missing_gi_dl.json()["detail"]
-
-    # 3. Artisan 1 completes DigiLocker sandbox fetch -> Artisan 2 cannot hijack Artisan 1's session ID
-    dl1 = _fetch_sandbox_digilocker_card(client, card_no="PEH-JK-2026-7701", holder_name="Tariq")
-    set_authenticated_principal(app, p_art2)
-    assert client.get(f"/api/v1/auth/digilocker/session/{dl1['verification_id']}").status_code == 404
-    hijack = client.post(
-        "/api/v1/auth/artisan-verification",
-        json={
-            "store_name": "Hijack Loom",
-            "craft_specialty": "pashmina",
-            "workshop_district": "Srinagar",
-            "verification_path": "STANDARD",
-            "digilocker_verification_id": dl1["verification_id"],
-        },
-    )
-    assert hijack.status_code == 422
-
-    # 4. Sandbox endpoints refuse to run when app_env == "production" unless live OAuth creds are set
-    orig_provider = app.dependency_overrides.get(get_settings, get_settings)
-    orig_settings = orig_provider()
-    prod_settings = orig_settings.model_copy(
-        update={
-            "app_env": "production",
-            "digilocker_mode": "sandbox",
-        }
-    )
-    app.dependency_overrides[get_settings] = lambda: prod_settings
-    try:
-        prod_start = client.post("/api/v1/auth/digilocker/start", json={})
-        assert prod_start.status_code == 503
-    finally:
-        app.dependency_overrides[get_settings] = orig_provider
-        app.dependency_overrides.pop(get_current_principal, None)
-
-
-def test_23_digilocker_live_oauth_pkce_callback_fetches_issued_card_and_cleanup(
-    app_and_client, db_session, monkeypatch
-):
-    """Test live DigiLocker OAuth 2.0 + PKCE authorize -> callback -> token/files fetch -> admin view -> user delete cleanup."""
-    import urllib.parse
-    import httpx
-    from pydantic import SecretStr
-    from sqlalchemy import select
-    from app.core.auth import load_principal_by_clerk_id
-    from app.core.config import Settings, get_settings
-    from app.models.core_models import DigiLockerVerification
-    from tests.conftest import seed_marketplace_entities, set_authenticated_principal
-
-    app, client = app_and_client
-    entities = seed_marketplace_entities(db_session)
-
-    _set_clerk_claims(app, {"sub": "user_2dlLiveArtisan01"})
-    sync = client.post(
-        "/api/v1/auth/sync",
-        json={"email": "dl.live@example.com", "first_name": "Nadia", "last_name": "Bano", "requested_role": "artisan"},
-    )
-    assert sync.status_code == 200
-    uid = sync.json()["user_id"]
-    _set_clerk_claims(app, None)
-
-    p_live = load_principal_by_clerk_id(db_session, "user_2dlLiveArtisan01")
-    set_authenticated_principal(app, p_live)
-
-    orig_provider = app.dependency_overrides.get(get_settings, get_settings)
-    orig_settings = orig_provider()
-    live_settings = orig_settings.model_copy(
-        update={
-            "app_env": "test",
-            "frontend_base_url": "https://hunarlink.example",
-            "digilocker_mode": "live",
-            "digilocker_client_id": "dl_client_test_001",
-            "digilocker_client_secret": SecretStr("dl_secret_test_001"),
-            "digilocker_redirect_uri": "https://hunarlink.example/api/v1/auth/digilocker/callback",
-            "digilocker_auth_base_url": "https://api.digitallocker.gov.in",
-        }
-    )
-    app.dependency_overrides[get_settings] = lambda: live_settings
-
-    # Mock httpx.Client for MeriPehchaan token exchange, issued files list, and file binary download
-    valid_png = (
-        b"\x89PNG\r\n\x1a\n"
-        b"\x00\x00\x00\rIHDR\x00\x00\x00\x02\x00\x00\x00\x02\x08\x02\x00\x00\x00\xfd\xd4\x9a\x73"
-        b"\x00\x00\x00\x12IDATx\x9cc\xf8\xcf\xc0\x00\x00\x04\x00\x01\r\n\x2d\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
-    )
-    captured_token_payload = {}
-
-    class _MockResp:
-        def __init__(self, status_code: int, *, json_data=None, content: bytes = b"", headers=None):
-            self.status_code = status_code
-            self._json = json_data
-            self.content = content
-            self.headers = headers or {}
-
-        def json(self):
-            return self._json
-
-    class _MockHttpxClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def post(self, url, data=None, **kwargs):
-            captured_token_payload["url"] = url
-            captured_token_payload["data"] = dict(data or {})
-            return _MockResp(
-                200,
-                json_data={
-                    "access_token": "dl_live_access_tok_abc",
-                    "name": "Nadia Bano",
-                    "digilockerid": "DLID-998877",
-                },
-            )
-
-        def get(self, url, headers=None, **kwargs):
-            assert headers and headers.get("Authorization") == "Bearer dl_live_access_tok_abc"
-            if "/files/issued" in url:
-                return _MockResp(
-                    200,
-                    json_data={
-                        "items": [
-                            {
-                                "name": "Artisan Pehchan Card",
-                                "doctype": "ARTCD",
-                                "uri": "in.gov.handicrafts-ARTCD-PEH20265511",
-                                "issuerid": "in.gov.handicrafts",
-                                "issuer": "Development Commissioner (Handicrafts), Ministry of Textiles",
-                                "date": "15-04-2025",
-                            }
-                        ]
-                    },
-                )
-            if "/public/oauth2/1/file/" in url:
-                return _MockResp(
-                    200,
-                    content=valid_png,
-                    headers={"content-type": "image/png"},
-                )
-            return _MockResp(404)
-
-    monkeypatch.setattr("app.modules.auth.digilocker.httpx.Client", _MockHttpxClient)
-
-    try:
-        # 1. Start live OAuth -> returns PKCE S256 authorize URL
-        start = client.post("/api/v1/auth/digilocker/start", json={"return_to": "/auth?tab=verify"})
-        assert start.status_code == 200
-        sbody = start.json()
-        assert sbody["mode"] == "live"
-        auth_url = urllib.parse.urlparse(sbody["authorize_url"])
-        qs = urllib.parse.parse_qs(auth_url.query)
-        assert qs["client_id"] == ["dl_client_test_001"]
-        assert qs["code_challenge_method"] == ["S256"]
-        assert qs["state"] == [sbody["state"]]
-
-        # 2. Simulate DigiLocker OAuth callback -> exchanges code + PKCE code_verifier & fetches PNG into FileSecurityScan
-        cb = client.get(
-            f"/api/v1/auth/digilocker/callback?code=dl_auth_code_999&state={sbody['state']}",
-            follow_redirects=False,
-        )
-        assert cb.status_code == 302
-        loc = cb.headers["location"]
-        assert f"digilocker_id={sbody['verification_id']}" in loc
-        assert "digilocker_status=fetched" in loc
-        assert "code_verifier" in captured_token_payload["data"]
-
-        # 3. Artisan fetches session summary & submits GI verification
-        sess = client.get(f"/api/v1/auth/digilocker/session/{sbody['verification_id']}")
-        assert sess.status_code == 200
-        sdata = sess.json()
-        assert sdata["mode"] == "live"
-        assert sdata["status"] == "FETCHED"
-        assert sdata["artisan_card_number"] == "PEH20265511"
-        assert sdata["doc_uri"] == "in.gov.handicrafts-ARTCD-PEH20265511"
-        assert sdata["file_scan_id"]
-
-        sub = client.post(
-            "/api/v1/auth/artisan-verification",
-            json={
-                "store_name": "Nadia Sozni Atelier",
-                "craft_specialty": "sozni",
-                "workshop_district": "Budgam",
-                "verification_path": "GI",
-                "claimed_gi_code": "GI-JK-SOZ-7721",
-                "digilocker_verification_id": sbody["verification_id"],
-            },
-        )
-        assert sub.status_code == 201
-        app_id = sub.json()["application_id"]
-        assert sub.json()["seller_profile"]["digilocker_mode"] == "live"
-        assert sub.json()["seller_profile"]["digilocker_doc_uri"] == "in.gov.handicrafts-ARTCD-PEH20265511"
-
-        # 4. Admin overview shows live DigiLocker metadata & fetched card binary
-        set_authenticated_principal(app, entities["admin_principal"])
-        ov = client.get("/api/v1/admin/overview").json()
-        entry = next(a for a in ov["artisan_applications"] if a["id"] == app_id)
-        assert entry["digilocker_mode"] == "live"
-        assert entry["digilocker_issuer_id"] == "in.gov.handicrafts"
-        assert entry["digilocker_card_number"] == "PEH20265511"
-
-        # 5. Deleting user cleanly removes DigiLockerVerification rows too
-        del_r = client.delete(f"/api/v1/admin/users/{uid}")
-        assert del_r.status_code == 200
-        assert (
-            db_session.scalar(
-                select(DigiLockerVerification).where(DigiLockerVerification.user_id == uid)
-            )
-            is None
-        )
-    finally:
-        app.dependency_overrides[get_settings] = orig_provider
-        app.dependency_overrides.pop(get_current_principal, None)
-
 
 
 
